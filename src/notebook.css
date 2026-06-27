@@ -827,3 +827,17 @@ a:hover { text-decoration: underline; }
     padding: 1px 9px;
     margin-left: 8px;
 }
+
+/* workspace component variables (used by the vendored ws-* rules above) */
+:root {
+    --ws-accent: #5b6ef5;
+    --ws-accent-d: #4554d8;
+    --ws-bg: #f5f7fb;
+    --ws-panel: #ffffff;
+    --ws-border: #e2e8f2;
+    --ws-muted: #61708a;
+    --ws-ink: #1f2733;
+    --ws-danger: #d93025;
+    --ws-ok: #0f9d58;
+    --ws-radius: 12px;
+}
