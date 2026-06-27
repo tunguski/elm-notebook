@@ -24,6 +24,24 @@ mean (List.map (\r -> r.salary) people)       -- 92.5
 groupBy (\r -> r.dept) people                 -- nested table: one group per dept
 ```
 
+## Features
+
+- **Real Elm cells** — code cells run genuine Elm (full `List`/`String`/`Dict`/`Maybe`, records,
+  `case`, tuples, lambdas) via the vendored interpreter, with a stateful kernel and `_` for the
+  last result.
+- **Live syntax highlighting** and auto-growing editors (vendored `CodeEditor`); **Shift/Ctrl/
+  Cmd+Enter** runs a cell.
+- **Rich output** — scalars, records, nested tables (recursively), 2-D grids, and a **chart
+  toggle** (Bar / Line / Scatter) on any chartable result, drawn by the sister
+  [elm-svg](https://github.com/tunguski/elm-svg) library.
+- **Interactive input widgets** — slider / number / text / checkbox cells that bind a name and
+  re-run the notebook live (ipywidgets-style parameters).
+- **Suggested next steps** and one-click **guided lessons**, plus a **variables inspector**
+  listing every binding (type + preview).
+- **CSV / TSV import** — paste a spreadsheet export and it becomes a real `List` of records.
+- **Summary stats** — `describe` / `median` / `stdev` in the prelude.
+- **Autosave** — the notebook persists to the browser's local storage and restores on return.
+
 ## Why reuse the interpreter
 
 Rather than ship a toy language, elm-notebook **vendors the real Elm interpreter** that powers

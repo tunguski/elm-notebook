@@ -1,9 +1,9 @@
 module Notebook.Doc exposing
     ( Doc, empty, fromSpec
-    , append, insertAfter, remove, moveUp, moveDown
-    , setSource, setKind
+    , append, appendInput, insertAfter, remove, moveUp, moveDown
+    , setSource, setKind, setInputValue, setInputName, setInputControl
     , runAll, runThrough, clearOutputs
-    , find, lastValue, codeCount
+    , find, lastValue, codeCount, variables
     )
 
 {-| The notebook **document**: an ordered list of [`Cell`](Notebook-Cell#Cell)s plus the
@@ -22,7 +22,7 @@ are always a faithful, reproducible function of the source — no hidden out-of-
 -}
 
 import Lang exposing (Value)
-import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
+import Notebook.Cell as Cell exposing (Cell, CellKind(..), InputSpec, Output(..))
 import Notebook.Kernel as Kernel exposing (Kernel)
 
 
@@ -55,12 +55,25 @@ newCell id kind source =
         Code ->
             Cell.code id source
 
+        Input ->
+            -- input cells are created via `appendInput`; this is a defensive fallback.
+            Cell.code id source
+
 
 {-| Append a cell to the end of the notebook. -}
 append : CellKind -> String -> Doc -> Doc
 append kind source doc =
     { doc
         | cells = doc.cells ++ [ newCell doc.nextId kind source ]
+        , nextId = doc.nextId + 1
+    }
+
+
+{-| Append an input-widget cell. -}
+appendInput : InputSpec -> Doc -> Doc
+appendInput spec doc =
+    { doc
+        | cells = doc.cells ++ [ Cell.inputCell doc.nextId spec ]
         , nextId = doc.nextId + 1
     }
 
@@ -129,6 +142,24 @@ setKind targetId kind doc =
     mapCell targetId (\c -> { c | kind = kind, output = OutNone, count = Nothing }) doc
 
 
+{-| Set an input cell's value (re-syncs its `name = …` source). -}
+setInputValue : Int -> String -> Doc -> Doc
+setInputValue targetId value doc =
+    mapCell targetId (Cell.setInputValue value) doc
+
+
+{-| Rename an input cell's bound name. -}
+setInputName : Int -> String -> Doc -> Doc
+setInputName targetId name doc =
+    mapCell targetId (Cell.setInputName name) doc
+
+
+{-| Change an input cell's control type. -}
+setInputControl : Int -> Cell.Control -> Doc -> Doc
+setInputControl targetId control doc =
+    mapCell targetId (Cell.setInputControl control) doc
+
+
 mapCell : Int -> (Cell -> Cell) -> Doc -> Doc
 mapCell targetId f doc =
     { doc
@@ -167,30 +198,28 @@ runFrom stopAt doc =
             if done then
                 ( kernel, done, cell :: acc )
 
+            else if Cell.isExecutable cell then
+                let
+                    ( output, kernel2 ) =
+                        Kernel.run cell.source kernel
+
+                    count =
+                        if output == OutNone && cell.source == "" then
+                            Nothing
+
+                        else
+                            Just kernel2.count
+                in
+                ( kernel2
+                , stopAt == Just cell.id
+                , { cell | output = output, count = count } :: acc
+                )
+
             else
-                case cell.kind of
-                    Markdown ->
-                        ( kernel
-                        , stopAt == Just cell.id
-                        , { cell | output = OutNone, count = Nothing } :: acc
-                        )
-
-                    Code ->
-                        let
-                            ( output, kernel2 ) =
-                                Kernel.run cell.source kernel
-
-                            count =
-                                if output == OutNone && cell.source == "" then
-                                    Nothing
-
-                                else
-                                    Just kernel2.count
-                        in
-                        ( kernel2
-                        , stopAt == Just cell.id
-                        , { cell | output = output, count = count } :: acc
-                        )
+                ( kernel
+                , stopAt == Just cell.id
+                , { cell | output = OutNone, count = Nothing } :: acc
+                )
 
         ( finalKernel, _, reversed ) =
             List.foldl step ( Kernel.empty, False, [] ) doc.cells
@@ -235,3 +264,9 @@ lastValue doc =
 codeCount : Doc -> Int
 codeCount doc =
     List.length (List.filter Cell.isCode doc.cells)
+
+
+{-| The user-defined kernel bindings (name, value) for the variables inspector. -}
+variables : Doc -> List ( String, Value )
+variables doc =
+    Kernel.bindings doc.kernel

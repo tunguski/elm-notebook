@@ -16,13 +16,17 @@ module only wires the document to the view.
 
 import Browser
 import Dict exposing (Dict)
-import Html exposing (Html, a, button, div, footer, h1, header, p, section, span, text)
+import Html exposing (Html, a, button, div, footer, h1, header, input, p, section, span, text, textarea)
 import Html.Attributes as HA
 import Html.Events as HE
-import Notebook.Cell exposing (CellKind(..))
+import Notebook.Cell as Cell exposing (CellKind(..), Control(..))
+import Notebook.Chart as Chart
+import Notebook.Csv as Csv
 import Notebook.Doc as Doc exposing (Doc)
+import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest exposing (Lesson, Suggestion)
 import Notebook.View as View
+import Storage
 
 
 main : Program () Model Msg
@@ -43,7 +47,17 @@ type alias Model =
     { doc : Doc
     , lesson : String
     , carets : Dict Int Int
+    , charts : Dict Int Chart.ChartKind
+    , csvOpen : Bool
+    , csvName : String
+    , csvText : String
+    , csvError : Maybe String
     }
+
+
+storageKey : String
+storageKey =
+    "elm-notebook:autosave"
 
 
 init : () -> ( Model, Cmd Msg )
@@ -51,8 +65,14 @@ init _ =
     ( { doc = Doc.fromSpec Suggest.starter |> Doc.runAll
       , lesson = "starter"
       , carets = Dict.empty
+      , charts = Dict.empty
+      , csvOpen = False
+      , csvName = "data"
+      , csvText = ""
+      , csvError = Nothing
       }
-    , Cmd.none
+      -- restore the autosaved notebook, if any
+    , Storage.load storageKey Loaded
     )
 
 
@@ -71,13 +91,30 @@ type Msg
     | Insert Suggestion
     | AddCode
     | AddMarkdown
+    | AddInput
     | Clear
+    | NewNotebook
+    | Loaded (Maybe String)
     | LoadLesson Lesson
+    | SetChart Int (Maybe Chart.ChartKind)
+    | InsertName String
+    | SetInputValue Int String
+    | SetInputName Int String
+    | SetInputControl Int String
+    | ToggleCsv
+    | SetCsvName String
+    | SetCsvText String
+    | ImportCsv
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    ( pureUpdate msg model, Cmd.none )
+    let
+        updated =
+            pureUpdate msg model
+    in
+    -- autosave the notebook to local storage after every change
+    ( updated, Storage.save storageKey (Serialize.encode updated.doc) )
 
 
 pureUpdate : Msg -> Model -> Model
@@ -121,15 +158,112 @@ pureUpdate msg model =
         AddMarkdown ->
             { model | doc = Doc.append Markdown "## Notes\n\n…" model.doc }
 
+        AddInput ->
+            { model | doc = Doc.appendInput defaultInput model.doc |> Doc.runAll }
+
+        SetInputValue id value ->
+            { model | doc = Doc.setInputValue id value model.doc |> Doc.runAll }
+
+        SetInputName id name ->
+            { model | doc = Doc.setInputName id name model.doc |> Doc.runAll }
+
+        SetInputControl id controlName ->
+            { model | doc = Doc.setInputControl id (parseControl controlName) model.doc |> Doc.runAll }
+
+        ToggleCsv ->
+            { model | csvOpen = not model.csvOpen, csvError = Nothing }
+
+        SetCsvName name ->
+            { model | csvName = name }
+
+        SetCsvText csv ->
+            { model | csvText = csv }
+
+        ImportCsv ->
+            case Csv.toElm model.csvName model.csvText of
+                Ok source ->
+                    { model
+                        | doc = model.doc |> Doc.append Code source |> Doc.runAll
+                        , csvOpen = False
+                        , csvText = ""
+                        , csvError = Nothing
+                    }
+
+                Err message ->
+                    { model | csvError = Just message }
+
         Clear ->
             { model | doc = Doc.clearOutputs model.doc }
+
+        NewNotebook ->
+            { model
+                | doc = Doc.empty |> Doc.append Markdown "# New notebook\n\n…" |> Doc.append Code "" |> Doc.runAll
+                , lesson = ""
+                , carets = Dict.empty
+                , charts = Dict.empty
+            }
+
+        Loaded maybeJson ->
+            case maybeJson of
+                Just json ->
+                    case Serialize.decode json of
+                        Ok doc ->
+                            { model
+                                | doc = Doc.runAll doc
+                                , lesson = ""
+                                , carets = Dict.empty
+                                , charts = Dict.empty
+                            }
+
+                        Err _ ->
+                            model
+
+                Nothing ->
+                    -- nothing saved yet
+                    model
 
         LoadLesson lesson ->
             { model
                 | doc = Doc.fromSpec lesson.cells |> Doc.runAll
                 , lesson = lesson.id
                 , carets = Dict.empty
+                , charts = Dict.empty
             }
+
+        InsertName name ->
+            { model | doc = model.doc |> Doc.append Code name |> Doc.runAll }
+
+        SetChart id maybeKind ->
+            { model
+                | charts =
+                    case maybeKind of
+                        Just kind ->
+                            Dict.insert id kind model.charts
+
+                        Nothing ->
+                            Dict.remove id model.charts
+            }
+
+
+defaultInput : Cell.InputSpec
+defaultInput =
+    { name = "x", control = Slider 0 100 1, value = "50" }
+
+
+parseControl : String -> Control
+parseControl name =
+    case name of
+        "number" ->
+            NumberBox
+
+        "text" ->
+            TextBox
+
+        "checkbox" ->
+            Checkbox
+
+        _ ->
+            Slider 0 100 1
 
 
 
@@ -146,6 +280,11 @@ viewConfig model =
     , onConvert = Convert
     , onInsert = Insert
     , caretOf = \id -> Dict.get id model.carets |> Maybe.withDefault 0
+    , chartOf = \id -> Dict.get id model.charts
+    , onChart = SetChart
+    , onInputValue = SetInputValue
+    , onInputName = SetInputName
+    , onInputControl = SetInputControl
     }
 
 
@@ -155,9 +294,44 @@ view model =
         [ pageHeader
         , lessonBar model.lesson
         , toolbar "nb-actions"
+        , csvPanel model
         , main_ model
         , pageFooter
         ]
+
+
+csvPanel : Model -> Html Msg
+csvPanel model =
+    if not model.csvOpen then
+        text ""
+
+    else
+        section [ HA.class "nb-csv" ]
+            [ div [ HA.class "nb-csv-head" ]
+                [ span [ HA.class "nb-csv-title" ] [ text "Import CSV / TSV" ]
+                , span [ HA.class "nb-csv-hint" ] [ text "Paste a spreadsheet export — a header row, then data. It becomes a List of records." ]
+                ]
+            , div [ HA.class "nb-csv-row" ]
+                [ span [ HA.class "nb-csv-label" ] [ text "Name:" ]
+                , input [ HA.class "nb-input-name", HA.value model.csvName, HE.onInput SetCsvName ] []
+                , button [ HA.class "nb-action nb-action-primary", HE.onClick ImportCsv ] [ text "Add table" ]
+                , button [ HA.class "nb-action", HE.onClick ToggleCsv ] [ text "Cancel" ]
+                ]
+            , textarea
+                [ HA.class "nb-csv-text"
+                , HA.attribute "rows" "7"
+                , HA.placeholder "name, age, city\nAda, 36, Oslo\nGrace, 41, London"
+                , HA.value model.csvText
+                , HE.onInput SetCsvText
+                ]
+                []
+            , case model.csvError of
+                Just err ->
+                    div [ HA.class "nb-csv-error" ] [ text err ]
+
+                Nothing ->
+                    text ""
+            ]
 
 
 pageHeader : Html Msg
@@ -211,7 +385,10 @@ toolbar extraClass =
         [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
         , button [ HA.class "nb-action", HE.onClick AddCode ] [ text "+ Code cell" ]
         , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text "+ Text cell" ]
+        , button [ HA.class "nb-action", HE.onClick AddInput ] [ text "+ Input" ]
+        , button [ HA.class "nb-action", HE.onClick ToggleCsv ] [ text "Import CSV" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
+        , button [ HA.class "nb-action", HE.onClick NewNotebook ] [ text "New" ]
         ]
 
 
@@ -224,6 +401,7 @@ main_ model =
             ]
         , div [ HA.class "nb-sidebar" ]
             [ View.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue model.doc))
+            , View.variablesPanel InsertName (Doc.variables model.doc)
             , helpCard
             ]
         ]
@@ -237,8 +415,10 @@ helpCard =
             [ Html.li [] [ text "Each code cell is one real-Elm expression." ]
             , Html.li [] [ text "Write name = expr to reuse a result in later cells." ]
             , Html.li [] [ text "_ always refers to the previous result." ]
-            , Html.li [] [ text "A List of records renders as a table." ]
-            , Html.li [] [ text "The full List / String / Dict libraries are available, plus mean and groupBy." ]
+            , Html.li [] [ text "Press Shift+Enter (or Ctrl/Cmd+Enter) to run a cell." ]
+            , Html.li [] [ text "A List of records renders as a table; toggle it to a chart." ]
+            , Html.li [] [ text "The full List / String / Dict libraries are available, plus mean, groupBy and describe." ]
+            , Html.li [] [ text "Your notebook autosaves to this browser and restores on return." ]
             ]
         ]
 

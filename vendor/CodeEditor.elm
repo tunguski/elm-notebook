@@ -24,7 +24,7 @@ clash with `Editor`'s own `ed-*` classes):
 
 import Html exposing (Html, div, pre, span, text, textarea)
 import Html.Attributes exposing (class, classList, value)
-import Html.Events exposing (on)
+import Html.Events exposing (on, preventDefaultOn)
 import Json.Decode as Decode
 
 
@@ -42,6 +42,7 @@ type alias Config msg =
     , gutter : Bool
     , highlight : String -> List ( String, String )
     , onChange : String -> Int -> msg
+    , onSubmit : Maybe msg
     }
 
 
@@ -58,14 +59,43 @@ view cfg =
                 [ pre [ class "ce-code ce-pre" ]
                     (List.map renderSegment (cfg.highlight cfg.source) ++ [ text "\n" ])
                 , textarea
-                    [ onEdit cfg.onChange
-                    , value cfg.source
-                    , class "ce-code ce-textarea"
-                    ]
+                    (onEdit cfg.onChange
+                        :: value cfg.source
+                        :: class "ce-code ce-textarea"
+                        :: submitAttr cfg.onSubmit
+                    )
                     []
                 ]
             ]
         ]
+
+
+{-| Run the cell on Ctrl/Cmd/Shift+Enter, swallowing the keystroke so no newline is inserted. -}
+submitAttr : Maybe msg -> List (Html.Attribute msg)
+submitAttr maybeMsg =
+    case maybeMsg of
+        Nothing ->
+            []
+
+        Just msg ->
+            [ preventDefaultOn "keydown" (submitDecoder msg) ]
+
+
+submitDecoder : msg -> Decode.Decoder ( msg, Bool )
+submitDecoder msg =
+    Decode.map4 (\key shift ctrl meta -> key == "Enter" && (shift || ctrl || meta))
+        (Decode.field "key" Decode.string)
+        (Decode.field "shiftKey" Decode.bool)
+        (Decode.field "ctrlKey" Decode.bool)
+        (Decode.field "metaKey" Decode.bool)
+        |> Decode.andThen
+            (\isSubmit ->
+                if isSubmit then
+                    Decode.succeed ( msg, True )
+
+                else
+                    Decode.fail "not a submit chord"
+            )
 
 
 {-| A `<textarea>` input handler capturing both the new text and the caret offset (`selectionStart`). -}

@@ -58,8 +58,10 @@ jobs:
           java -jar elm-lang/target/elm.jar test --report=json \
             test/NotebookTest.elm \
             vendor/Lang.elm vendor/Lexer.elm vendor/Parser.elm vendor/Eval.elm \
+            vendor/Scale.elm vendor/Chart.elm \
             src/Notebook/Prelude.elm src/Notebook/Value.elm src/Notebook/Cell.elm \
-            src/Notebook/Kernel.elm src/Notebook/Doc.elm src/Notebook/Suggest.elm > report.json
+            src/Notebook/Kernel.elm src/Notebook/Doc.elm src/Notebook/Suggest.elm \
+            src/Notebook/Chart.elm src/Notebook/Csv.elm src/Notebook/Serialize.elm > report.json
           code=$?
           set -e
           perl tools/gen-test-report.pl report.json public/tests.html

@@ -1,4 +1,4 @@
-module Notebook.Kernel exposing (Kernel, empty, run, names)
+module Notebook.Kernel exposing (Kernel, empty, run, names, bindings)
 
 {-| The notebook **kernel**: the stateful engine that executes code cells, the role the Python
 process plays in Jupyter — but here the language is real Elm, run by the vendored
@@ -53,6 +53,32 @@ empty =
 names : Kernel -> List String
 names kernel =
     Dict.keys kernel.globals
+
+
+{-| The names defined by the prelude — excluded from the variables inspector, which should show
+only what the user has bound.
+-}
+preludeNames : List String
+preludeNames =
+    Parser.parseProject [ ( "Prelude", Prelude.source ) ]
+        |> Result.map Dict.keys
+        |> Result.withDefault []
+
+
+{-| The user-defined bindings (everything except the prelude), each paired with its current value.
+A binding whose value fails to evaluate (e.g. a function referencing an as-yet-undefined name) is
+dropped. Used by the variables inspector.
+-}
+bindings : Kernel -> List ( String, Value )
+bindings kernel =
+    Dict.keys kernel.globals
+        |> List.filter (\nm -> not (List.member nm preludeNames))
+        |> List.filterMap
+            (\nm ->
+                Eval.evalGlobal kernel.globals nm
+                    |> Result.toMaybe
+                    |> Maybe.map (\v -> ( nm, v ))
+            )
 
 
 {-| Run a code cell's source, returning its output and the next kernel state. The execution

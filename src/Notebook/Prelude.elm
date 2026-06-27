@@ -32,6 +32,65 @@ unique items =
         items
 
 
+nth i xs =
+    case List.head (List.drop i xs) of
+        Just v ->
+            v
+
+        Nothing ->
+            0
+
+
+median numbers =
+    let
+        sorted =
+            List.sort numbers
+
+        size =
+            List.length numbers
+
+        mid =
+            size // 2
+    in
+    if size == 0 then
+        0
+
+    else if modBy 2 size == 1 then
+        nth mid sorted
+
+    else
+        (nth (mid - 1) sorted + nth mid sorted) / 2
+
+
+stdev numbers =
+    let
+        m =
+            mean numbers
+
+        size =
+            List.length numbers
+    in
+    if size == 0 then
+        0
+
+    else
+        sqrt (List.sum (List.map (\\x -> (x - m) * (x - m)) numbers) / toFloat size)
+
+
+describe numbers =
+    let
+        sorted =
+            List.sort numbers
+    in
+    { count = List.length numbers
+    , mean = mean numbers
+    , min = nth 0 sorted
+    , max = nth (List.length numbers - 1) sorted
+    , median = median numbers
+    , stdev = stdev numbers
+    }
+
+
 groupBy keyFn items =
     List.foldl (\\x groups -> groupAdd (keyFn x) x groups) [] items
 

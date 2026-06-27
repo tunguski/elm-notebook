@@ -14,8 +14,10 @@ every shipped lesson is executed through a real kernel and asserted to run clean
 import Expect exposing (Expectation)
 import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
+import Notebook.Csv as Csv
 import Notebook.Doc as Doc
 import Notebook.Kernel as Kernel
+import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest
 import Notebook.Value as Value
 import Test exposing (Test, describe, test)
@@ -39,7 +41,93 @@ suite =
         , kernelTests
         , docTests
         , suggestTests
+        , csvTests
+        , serializeTests
         , lessonTests
+        ]
+
+
+serializeTests : Test
+serializeTests =
+    describe "serialization (save / load)"
+        [ test "round-trips cells through JSON" <|
+            \_ ->
+                let
+                    doc =
+                        Doc.empty
+                            |> Doc.append Markdown "# hi"
+                            |> Doc.append Code "x = 5"
+                            |> Doc.appendInput { name = "t", control = Cell.Slider 0 10 1, value = "3" }
+
+                    restored =
+                        Serialize.decode (Serialize.encode doc)
+                in
+                case restored of
+                    Ok back ->
+                        Expect.equal
+                            (List.map .source back.cells)
+                            [ "# hi", "x = 5", "t = 3" ]
+
+                    Err message ->
+                        Expect.fail message
+        , test "preserves an input widget's control" <|
+            \_ ->
+                let
+                    doc =
+                        Doc.empty |> Doc.appendInput { name = "n", control = Cell.NumberBox, value = "7" }
+
+                    restored =
+                        Serialize.decode (Serialize.encode doc)
+                in
+                case restored |> Result.map (\d -> List.filterMap .input d.cells) of
+                    Ok [ spec ] ->
+                        Expect.equal ( spec.name, spec.control, spec.value ) ( "n", Cell.NumberBox, "7" )
+
+                    _ ->
+                        Expect.fail "expected one input spec"
+        ]
+
+
+csvTests : Test
+csvTests =
+    describe "CSV import"
+        [ test "generates a runnable table with typed columns" <|
+            \_ ->
+                case Csv.toElm "people" "name, age\nAda, 36\nGrace, 41" of
+                    Ok source ->
+                        evalOk source
+                            (vlist
+                                [ VRecord [ ( "name", s "Ada" ), ( "age", n 36 ) ]
+                                , VRecord [ ( "name", s "Grace" ), ( "age", n 41 ) ]
+                                ]
+                            )
+
+                    Err message ->
+                        Expect.fail message
+        , test "auto-detects tab separation" <|
+            \_ ->
+                case Csv.toElm "t" "a\tb\n1\t2" of
+                    Ok source ->
+                        evalOk source (vlist [ VRecord [ ( "a", n 1 ), ( "b", n 2 ) ] ])
+
+                    Err message ->
+                        Expect.fail message
+        , test "sanitises a messy header into a valid field" <|
+            \_ ->
+                case Csv.toElm "t" "First Name\nAda" of
+                    Ok source ->
+                        evalOk source (vlist [ VRecord [ ( "first_name", s "Ada" ) ] ])
+
+                    Err message ->
+                        Expect.fail message
+        , test "rejects input with no data rows" <|
+            \_ ->
+                case Csv.toElm "t" "only,a,header" of
+                    Ok _ ->
+                        Expect.fail "expected an error"
+
+                    Err _ ->
+                        Expect.pass
         ]
 
 
@@ -232,6 +320,11 @@ preludeTests =
             ("mean (List.map (\\r -> r.salary) " ++ peopleSrc ++ ")")
             (n 100)
         , check "unique" "unique [ 1, 1, 2, 3, 3, 3 ]" (vlist [ n 1, n 2, n 3 ])
+        , check "median odd" "median [ 3, 1, 2 ]" (n 2)
+        , check "median even" "median [ 1, 2, 3, 4 ]" (n 2.5)
+        , check "stdev of constants" "stdev [ 5, 5, 5 ]" (n 0)
+        , check "describe count" "(describe [ 2, 4, 6 ]).count" (n 3)
+        , check "describe mean" "(describe [ 2, 4, 6 ]).max" (n 6)
         , check "groupBy keys"
             ("List.map (\\g -> g.key) (groupBy (\\r -> r.dept) " ++ peopleSrc ++ ")")
             (vlist [ s "Eng", s "Design" ])

@@ -1,4 +1,4 @@
-module Notebook.View exposing (Config, notebook, suggestionsPanel, valueHtml, markdownHtml)
+module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, valueHtml, markdownHtml)
 
 {-| The HTML view of a notebook: syntax-highlighted, auto-growing editors, outputs rendered as
 scalars / records / tables (recursively, so nested tables nest) / headerless 2-D grids / errors,
@@ -15,11 +15,12 @@ message constructors.
 
 import CodeEditor
 import Highlight
-import Html exposing (Html, a, button, div, h2, h3, h4, li, p, span, strong, table, tbody, td, text, th, thead, tr, ul)
+import Html exposing (Html, a, button, div, h2, h3, h4, input, li, p, span, strong, table, tbody, td, text, th, thead, tr, ul)
 import Html.Attributes as HA
 import Html.Events as HE
 import Lang exposing (Value(..))
-import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
+import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
+import Notebook.Chart as Chart exposing (ChartKind)
 import Notebook.Doc exposing (Doc)
 import Notebook.Suggest exposing (Suggestion)
 import Notebook.Value as Value
@@ -35,6 +36,11 @@ type alias Config msg =
     , onConvert : Int -> CellKind -> msg
     , onInsert : Suggestion -> msg
     , caretOf : Int -> Int
+    , chartOf : Int -> Maybe ChartKind
+    , onChart : Int -> Maybe ChartKind -> msg
+    , onInputValue : Int -> String -> msg
+    , onInputName : Int -> String -> msg
+    , onInputControl : Int -> String -> msg
     }
 
 
@@ -58,6 +64,125 @@ cellView config cell =
         Markdown ->
             markdownCellView config cell
 
+        Input ->
+            inputCellView config cell
+
+
+inputCellView : Config msg -> Cell -> Html msg
+inputCellView config cell =
+    case cell.input of
+        Nothing ->
+            codeCellView config cell
+
+        Just spec ->
+            div [ HA.class "nb-cell nb-cell-input" ]
+                [ div [ HA.class "nb-gutter" ]
+                    [ span [ HA.class "nb-prompt nb-prompt-out" ] [ text (promptLabel "In" cell.count) ] ]
+                , div [ HA.class "nb-body" ]
+                    [ div [ HA.class "nb-input-row" ]
+                        [ input
+                            [ HA.class "nb-input-name"
+                            , HA.value spec.name
+                            , HA.attribute "spellcheck" "false"
+                            , HE.onInput (config.onInputName cell.id)
+                            ]
+                            []
+                        , span [ HA.class "nb-input-eq" ] [ text "=" ]
+                        , controlWidget config cell spec
+                        , span [ HA.class "nb-input-val" ] [ text (litText spec) ]
+                        , controlSelect config cell spec
+                        ]
+                    , cellToolbar config cell
+                    ]
+                ]
+
+
+controlSelect : Config msg -> Cell -> Cell.InputSpec -> Html msg
+controlSelect config cell spec =
+    Html.select
+        [ HA.class "nb-input-type", HE.onInput (config.onInputControl cell.id) ]
+        [ controlOption "slider" "Slider" (isSlider spec.control)
+        , controlOption "number" "Number" (spec.control == NumberBox)
+        , controlOption "text" "Text" (spec.control == TextBox)
+        , controlOption "checkbox" "Checkbox" (spec.control == Checkbox)
+        ]
+
+
+controlOption : String -> String -> Bool -> Html msg
+controlOption val lbl selected =
+    Html.option [ HA.value val, HA.selected selected ] [ text lbl ]
+
+
+isSlider : Control -> Bool
+isSlider control =
+    case control of
+        Slider _ _ _ ->
+            True
+
+        _ ->
+            False
+
+
+controlWidget : Config msg -> Cell -> Cell.InputSpec -> Html msg
+controlWidget config cell spec =
+    case spec.control of
+        Slider mn mx st ->
+            input
+                [ HA.type_ "range"
+                , HA.class "nb-input-range"
+                , HA.value spec.value
+                , HA.attribute "min" (String.fromFloat mn)
+                , HA.attribute "max" (String.fromFloat mx)
+                , HA.attribute "step" (String.fromFloat st)
+                , HE.onInput (config.onInputValue cell.id)
+                ]
+                []
+
+        NumberBox ->
+            input
+                [ HA.type_ "number", HA.class "nb-input-box", HA.value spec.value, HE.onInput (config.onInputValue cell.id) ]
+                []
+
+        TextBox ->
+            input
+                [ HA.type_ "text", HA.class "nb-input-box", HA.value spec.value, HE.onInput (config.onInputValue cell.id) ]
+                []
+
+        Checkbox ->
+            button
+                [ HA.class ("nb-chip" ++ boolOn spec.value)
+                , HE.onClick (config.onInputValue cell.id (toggleBool spec.value))
+                ]
+                [ text spec.value ]
+
+
+boolOn : String -> String
+boolOn value =
+    if value == "True" then
+        " nb-chip-on"
+
+    else
+        ""
+
+
+toggleBool : String -> String
+toggleBool value =
+    if value == "True" then
+        "False"
+
+    else
+        "True"
+
+
+litText : Cell.InputSpec -> String
+litText spec =
+    case spec.control of
+        TextBox ->
+            "\"" ++ spec.value ++ "\""
+
+        _ ->
+            spec.value
+
 
 codeCellView : Config msg -> Cell -> Html msg
 codeCellView config cell =
@@ -71,9 +196,10 @@ codeCellView config cell =
                 , gutter = True
                 , highlight = Highlight.segments
                 , onChange = config.onEdit cell.id
+                , onSubmit = Just (config.onRun cell.id)
                 }
             , cellToolbar config cell
-            , outputView cell.output cell.count
+            , outputArea config cell
             ]
         ]
 
@@ -90,6 +216,7 @@ markdownCellView config cell =
                 , gutter = False
                 , highlight = plainSegments
                 , onChange = config.onEdit cell.id
+                , onSubmit = Nothing
                 }
             , cellToolbar config cell
             ]
@@ -112,6 +239,9 @@ cellToolbar config cell =
                 Markdown ->
                     toolButton "To code" (config.onConvert cell.id Code)
 
+                Input ->
+                    text ""
+
         runButton =
             case cell.kind of
                 Code ->
@@ -119,7 +249,7 @@ cellToolbar config cell =
                         [ HA.class "nb-btn nb-btn-run", HE.onClick (config.onRun cell.id) ]
                         [ text "▶ Run" ]
 
-                Markdown ->
+                _ ->
                     text ""
     in
     div [ HA.class "nb-toolbar" ]
@@ -137,23 +267,73 @@ toolButton label msg =
     button [ HA.class "nb-btn nb-btn-ghost", HE.onClick msg ] [ text label ]
 
 
-outputView : Output -> Maybe Int -> Html msg
-outputView output count =
-    case output of
+outputArea : Config msg -> Cell -> Html msg
+outputArea config cell =
+    case cell.output of
         OutNone ->
             text ""
 
         OutError message ->
             div [ HA.class "nb-out nb-out-error" ]
-                [ span [ HA.class "nb-prompt nb-prompt-err" ] [ text (promptLabel "Out" count) ]
+                [ span [ HA.class "nb-prompt nb-prompt-err" ] [ text (promptLabel "Out" cell.count) ]
                 , div [ HA.class "nb-error" ] [ text message ]
                 ]
 
         OutValue value ->
             div [ HA.class "nb-out" ]
-                [ span [ HA.class "nb-prompt nb-prompt-out" ] [ text (promptLabel "Out" count) ]
-                , div [ HA.class "nb-value" ] [ valueHtml value ]
+                [ span [ HA.class "nb-prompt nb-prompt-out" ] [ text (promptLabel "Out" cell.count) ]
+                , div [ HA.class "nb-value" ]
+                    [ chartToggle config cell value
+                    , renderOutput config cell value
+                    ]
                 ]
+
+
+renderOutput : Config msg -> Cell -> Value -> Html msg
+renderOutput config cell value =
+    case config.chartOf cell.id of
+        Just kind ->
+            if Chart.chartable value then
+                div [ HA.class "nb-chart-box" ] [ Chart.view kind value ]
+
+            else
+                valueHtml value
+
+        Nothing ->
+            valueHtml value
+
+
+chartToggle : Config msg -> Cell -> Value -> Html msg
+chartToggle config cell value =
+    if Chart.chartable value then
+        let
+            current =
+                config.chartOf cell.id
+
+            chip lbl active msg =
+                button
+                    [ HA.class
+                        ("nb-chip"
+                            ++ (if active then
+                                    " nb-chip-on"
+
+                                else
+                                    ""
+                               )
+                        )
+                    , HE.onClick msg
+                    ]
+                    [ text lbl ]
+        in
+        div [ HA.class "nb-chart-toggle" ]
+            (chip "Table" (current == Nothing) (config.onChart cell.id Nothing)
+                :: List.map
+                    (\k -> chip (Chart.label k) (current == Just k) (config.onChart cell.id (Just k)))
+                    Chart.kinds
+            )
+
+    else
+        text ""
 
 
 promptLabel : String -> Maybe Int -> String
@@ -374,6 +554,47 @@ kindClass kind =
 
         Markdown ->
             "md"
+
+
+
+-- VARIABLES INSPECTOR --------------------------------------------------------
+
+
+{-| A panel listing the user's kernel bindings (name · type · value preview). Clicking one inserts
+a cell that references it.
+-}
+variablesPanel : (String -> msg) -> List ( String, Value ) -> Html msg
+variablesPanel onPick vars =
+    div [ HA.class "nb-vars" ]
+        [ h3 [ HA.class "nb-vars-title" ] [ text "Variables" ]
+        , if List.isEmpty vars then
+            p [ HA.class "nb-vars-empty" ] [ text "Names you define with = appear here." ]
+
+          else
+            div [ HA.class "nb-vars-list" ] (List.map (variableRow onPick) vars)
+        ]
+
+
+variableRow : (String -> msg) -> ( String, Value ) -> Html msg
+variableRow onPick ( name, value ) =
+    button [ HA.class "nb-var", HA.title ("Insert a cell for " ++ name), HE.onClick (onPick name) ]
+        [ span [ HA.class "nb-var-name" ] [ text name ]
+        , span [ HA.class "nb-var-type" ] [ text (Value.typeName value) ]
+        , span [ HA.class "nb-var-val" ] [ text (preview value) ]
+        ]
+
+
+preview : Value -> String
+preview value =
+    let
+        s =
+            Value.inlineValue value
+    in
+    if String.length s > 30 then
+        String.left 29 s ++ "…"
+
+    else
+        s
 
 
 firstLine : String -> String
