@@ -21,4 +21,5 @@ $ELM test "$P/test/NotebookTest.elm" \
   "$P/vendor/Scale.elm" "$P/vendor/Chart.elm" \
   "$P/src/Notebook/Prelude.elm" "$P/src/Notebook/Value.elm" "$P/src/Notebook/Cell.elm" \
   "$P/src/Notebook/Kernel.elm" "$P/src/Notebook/Doc.elm" "$P/src/Notebook/Suggest.elm" \
-  "$P/src/Notebook/Chart.elm" "$P/src/Notebook/Csv.elm" "$P/src/Notebook/Serialize.elm"
+  "$P/src/Notebook/Chart.elm" "$P/src/Notebook/Csv.elm" "$P/src/Notebook/Serialize.elm" \
+  "$P/vendor/Workspace/Types.elm" "$P/vendor/Workspace/Table.elm" "$P/src/Notebook/Export.elm"

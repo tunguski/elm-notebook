@@ -5,6 +5,13 @@ A **Jupyter-style notebook for exploring data in real Elm**, in the browser — 
 
 Live site: **https://tunguski.github.io/elm-notebook/**
 
+The site is a **workspace** of notebooks — create / name / open / search / copy / delete them,
+set who can read or edit each one (owners & readers, users or groups, private / public), comment on
+cells in threads, import data from a URL, run SQL (with a database backend) and export any step to
+CSV / JSON / Excel. All of that comes from the reusable
+[elm-workspace](https://github.com/tunguski/elm-workspace) library (vendored under `vendor/`); this
+repo supplies the **notebook** document — its kernel, cells and editor.
+
 A notebook is an ordered list of **cells**. A cell is either *Markdown* (prose) or *Code* — one
 Elm expression the **kernel** evaluates. The kernel is stateful: a `name = expr` cell publishes
 `name` to every later cell, and `_` is the most recent result. The language is **real Elm**, run
@@ -26,6 +33,12 @@ groupBy (\r -> r.dept) people                 -- nested table: one group per dep
 
 ## Features
 
+- **A workspace of notebooks** — many notebooks managed in one place (create, name, open, search,
+  copy, delete), each persisted to the browser. Sharing & **permissions** (owners / readers, users
+  or groups, private / public), threaded **comments** on cells (with markers and a show / hide
+  toggle), **URL import** (JSON / CSV), gated **SQL** queries, and **export** of any step to CSV /
+  JSON (Excel with a backend) — all from the shared
+  [elm-workspace](https://github.com/tunguski/elm-workspace) component.
 - **Real Elm cells** — code cells run genuine Elm (full `List`/`String`/`Dict`/`Maybe`, records,
   `case`, tuples, lambdas) via the vendored interpreter, with a stateful kernel and `_` for the
   last result.

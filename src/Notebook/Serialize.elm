@@ -1,4 +1,4 @@
-module Notebook.Serialize exposing (encode, decode)
+module Notebook.Serialize exposing (encode, decode, encodeDoc, decoder)
 
 {-| Persist a notebook as JSON, so it can be autosaved to the browser's local storage and restored
 on the next visit. Only the cells (their kind, source, and any input-widget spec) are stored — the
@@ -18,12 +18,17 @@ import Notebook.Doc as Doc exposing (Doc)
 {-| Serialise a notebook to a compact JSON string. -}
 encode : Doc -> String
 encode doc =
-    E.encode 0
-        (E.object
-            [ ( "version", E.int 1 )
-            , ( "cells", E.list encodeCell doc.cells )
-            ]
-        )
+    E.encode 0 (encodeDoc doc)
+
+
+{-| Serialise a notebook to a JSON value (used when a notebook is the inner document of a
+[workspace](Workspace) `Stored` record). -}
+encodeDoc : Doc -> E.Value
+encodeDoc doc =
+    E.object
+        [ ( "version", E.int 1 )
+        , ( "cells", E.list encodeCell doc.cells )
+        ]
 
 
 encodeCell : Notebook.Cell.Cell -> E.Value
@@ -78,6 +83,12 @@ runs it. -}
 decode : String -> Result String Doc
 decode json =
     D.decodeString docDecoder json |> Result.mapError D.errorToString
+
+
+{-| The notebook-document decoder, for use as a [workspace](Workspace) `DocCodec`. -}
+decoder : D.Decoder Doc
+decoder =
+    docDecoder
 
 
 docDecoder : D.Decoder Doc

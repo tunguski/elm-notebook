@@ -41,6 +41,9 @@ type alias Config msg =
     , onInputValue : Int -> String -> msg
     , onInputName : Int -> String -> msg
     , onInputControl : Int -> String -> msg
+    , commentsVisible : Bool
+    , commentCountOf : Int -> Int
+    , exportCell : Cell -> Html msg
     }
 
 
@@ -254,12 +257,27 @@ cellToolbar config cell =
     in
     div [ HA.class "nb-toolbar" ]
         [ runButton
+        , commentMarker config cell
         , div [ HA.class "nb-toolbar-spacer" ] []
         , toolButton "↑" (config.onMoveUp cell.id)
         , toolButton "↓" (config.onMoveDown cell.id)
         , convertButton
         , toolButton "✕" (config.onDelete cell.id)
         ]
+
+
+commentMarker : Config msg -> Cell -> Html msg
+commentMarker config cell =
+    let
+        n =
+            config.commentCountOf cell.id
+    in
+    if config.commentsVisible && n > 0 then
+        span [ HA.class "nb-comment-marker", HA.title "This cell has comments" ]
+            [ text ("💬 " ++ String.fromInt n) ]
+
+    else
+        text ""
 
 
 toolButton : String -> msg -> Html msg
@@ -283,7 +301,10 @@ outputArea config cell =
             div [ HA.class "nb-out" ]
                 [ span [ HA.class "nb-prompt nb-prompt-out" ] [ text (promptLabel "Out" cell.count) ]
                 , div [ HA.class "nb-value" ]
-                    [ chartToggle config cell value
+                    [ div [ HA.class "nb-out-tools" ]
+                        [ chartToggle config cell value
+                        , config.exportCell cell
+                        ]
                     , renderOutput config cell value
                     ]
                 ]

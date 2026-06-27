@@ -16,6 +16,7 @@ import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
 import Notebook.Csv as Csv
 import Notebook.Doc as Doc
+import Notebook.Export as Export
 import Notebook.Kernel as Kernel
 import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest
@@ -43,7 +44,31 @@ suite =
         , suggestTests
         , csvTests
         , serializeTests
+        , exportTests
         , lessonTests
+        ]
+
+
+exportTests : Test
+exportTests =
+    describe "export (cell value → workspace Table)"
+        [ test "a table value becomes headers + rows" <|
+            \_ ->
+                Export.valueToTable
+                    (VList
+                        [ VRecord [ ( "name", VStr "Ada" ), ( "age", VNum 36 ) ]
+                        , VRecord [ ( "name", VStr "Bob" ), ( "age", VNum 41 ) ]
+                        ]
+                    )
+                    |> Expect.equal
+                        (Just { headers = [ "name", "age" ], rows = [ [ "Ada", "36" ], [ "Bob", "41" ] ] })
+        , test "a plain list becomes a single value column" <|
+            \_ ->
+                Export.valueToTable (VList [ VNum 1, VNum 2, VNum 3 ])
+                    |> Expect.equal (Just { headers = [ "value" ], rows = [ [ "1" ], [ "2" ], [ "3" ] ] })
+        , test "a scalar is not exportable" <|
+            \_ ->
+                Export.valueToTable (VNum 42) |> Expect.equal Nothing
         ]
 
 
