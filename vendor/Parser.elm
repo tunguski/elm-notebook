@@ -283,10 +283,10 @@ parseTupleItems tokens acc =
             (\r ->
                 case Tuple.second r of
                     TComma :: rest ->
-                        parseTupleItems rest (acc ++ [ Tuple.first r ])
+                        parseTupleItems rest (Tuple.first r :: acc)
 
                     TRParen :: rest ->
-                        Ok ( Tup (acc ++ [ Tuple.first r ]), rest )
+                        Ok ( Tup (List.reverse (Tuple.first r :: acc)), rest )
 
                     _ ->
                         Err "expected ',' or ')' in tuple"
@@ -318,10 +318,10 @@ parseFields tokens acc =
                     (\r ->
                         case Tuple.second r of
                             TComma :: rest2 ->
-                                parseFields rest2 (acc ++ [ ( name, Tuple.first r ) ])
+                                parseFields rest2 (( name, Tuple.first r ) :: acc)
 
                             TRBrace :: rest2 ->
-                                Ok ( acc ++ [ ( name, Tuple.first r ) ], rest2 )
+                                Ok ( List.reverse (( name, Tuple.first r ) :: acc), rest2 )
 
                             _ ->
                                 Err "expected ',' or '}' in record"
@@ -539,7 +539,7 @@ parseListItems : List Token -> List Expr -> Result String ( Expr, List Token )
 parseListItems tokens acc =
     case tokens of
         TRBracket :: rest ->
-            Ok ( ListE acc, rest )
+            Ok ( ListE (List.reverse acc), rest )
 
         _ ->
             parseExpr tokens
@@ -547,10 +547,10 @@ parseListItems tokens acc =
                     (\r ->
                         case Tuple.second r of
                             TComma :: rest2 ->
-                                parseListItems rest2 (acc ++ [ Tuple.first r ])
+                                parseListItems rest2 (Tuple.first r :: acc)
 
                             TRBracket :: rest2 ->
-                                Ok ( ListE (acc ++ [ Tuple.first r ]), rest2 )
+                                Ok ( ListE (List.reverse (Tuple.first r :: acc)), rest2 )
 
                             _ ->
                                 Err "expected ',' or ']' in list"
@@ -584,14 +584,14 @@ parseBranches tokens acc =
                                 (\rb ->
                                     let
                                         branches =
-                                            acc ++ [ ( Tuple.first rp, Tuple.first rb ) ]
+                                            ( Tuple.first rp, Tuple.first rb ) :: acc
                                     in
                                     case Tuple.second rb of
                                         TSemi :: afterSemi ->
                                             parseBranches afterSemi branches
 
                                         rest ->
-                                            Ok ( branches, rest )
+                                            Ok ( List.reverse branches, rest )
                                 )
 
                     _ ->
@@ -644,10 +644,10 @@ parsePatternArgs : List Token -> List Pattern -> Result String ( List Pattern, L
 parsePatternArgs tokens acc =
     if startsPatternAtom tokens then
         parsePatternAtom tokens
-            |> Result.andThen (\r -> parsePatternArgs (Tuple.second r) (acc ++ [ Tuple.first r ]))
+            |> Result.andThen (\r -> parsePatternArgs (Tuple.second r) (Tuple.first r :: acc))
 
     else
-        Ok ( acc, tokens )
+        Ok ( List.reverse acc, tokens )
 
 
 startsPatternAtom : List Token -> Bool
@@ -689,10 +689,10 @@ parseTuplePat tokens acc =
             (\r ->
                 case Tuple.second r of
                     TComma :: rest ->
-                        parseTuplePat rest (acc ++ [ Tuple.first r ])
+                        parseTuplePat rest (Tuple.first r :: acc)
 
                     TRParen :: rest ->
-                        Ok ( PTup (acc ++ [ Tuple.first r ]), rest )
+                        Ok ( PTup (List.reverse (Tuple.first r :: acc)), rest )
 
                     _ ->
                         Err "expected ',' or ')' in tuple pattern"
@@ -704,13 +704,13 @@ parseRecordPatFields : List Token -> List String -> Result String ( Pattern, Lis
 parseRecordPatFields tokens acc =
     case tokens of
         TRBrace :: rest ->
-            Ok ( PRecord acc, rest )
+            Ok ( PRecord (List.reverse acc), rest )
 
         (TId name) :: TComma :: rest ->
-            parseRecordPatFields rest (acc ++ [ name ])
+            parseRecordPatFields rest (name :: acc)
 
         (TId name) :: TRBrace :: rest ->
-            Ok ( PRecord (acc ++ [ name ]), rest )
+            Ok ( PRecord (List.reverse (name :: acc)), rest )
 
         _ ->
             Err "expected a field name in record pattern"
@@ -818,7 +818,7 @@ chunk lines current done =
                 chunk rest [ line ] (flush current done)
 
             else
-                chunk rest (current ++ [ line ]) done
+                chunk rest (line :: current) done
 
 
 flush : List String -> List String -> List String
@@ -827,7 +827,7 @@ flush current done =
         done
 
     else
-        String.join "\n" current :: done
+        String.join "\n" (List.reverse current) :: done
 
 
 startsTopLevel : String -> Bool

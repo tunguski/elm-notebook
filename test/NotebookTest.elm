@@ -31,6 +31,7 @@ suite =
         , tableTests
         , preludeTests
         , controlFlowTests
+        , parsingTests
         , stringTests
         , valueHelperTests
         , errorTests
@@ -254,6 +255,37 @@ controlFlowTests =
         , check "case on Nothing"
             "case List.head [] of\n    Just v ->\n        v\n\n    Nothing ->\n        0"
             (n 0)
+        ]
+
+
+
+-- PARSING (element order) ----------------------------------------------------
+
+
+{-| The tuple/record/list/branch/pattern parsers accumulate with cons + a final List.reverse (was
+`acc ++ [x]`); these pin that the reversal preserves element order in multi-element literals and
+patterns — the one behaviour such a rewrite can get wrong. -}
+parsingTests : Test
+parsingTests =
+    describe "literal & pattern element order"
+        [ check "list literal order" "[ 3, 1, 2 ]" (vlist [ n 3, n 1, n 2 ])
+        , check "long list order" "[ 10, 20, 30, 40, 50 ]" (vlist [ n 10, n 20, n 30, n 40, n 50 ])
+        , check "tuple order" "( 1, 2, 3 )" (VTup [ n 1, n 2, n 3 ])
+        , check "record field order"
+            "{ a = 1, b = 2, c = 3 }"
+            (VRecord [ ( "a", n 1 ), ( "b", n 2 ), ( "c", n 3 ) ])
+        , check "multi-branch case picks the right arm"
+            "case 3 of\n    1 ->\n        10\n\n    2 ->\n        20\n\n    _ ->\n        30"
+            (n 30)
+        , check "tuple pattern binds in order"
+            "case ( 1, 2, 3 ) of\n    ( a, b, c ) ->\n        a * 100 + b * 10 + c"
+            (n 123)
+        , check "function pattern-args order"
+            "let\n    f a b c =\n        a + b * 10 + c * 100\nin\nf 1 2 3"
+            (n 321)
+        , check "record pattern fields"
+            "(\\{ a, b } -> a - b) { a = 5, b = 2 }"
+            (n 3)
         ]
 
 
