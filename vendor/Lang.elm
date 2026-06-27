@@ -16,8 +16,8 @@ type Value
     | VCtor String (List Value)
     | VRecord (List ( String, Value ))
     | VTup (List Value)
-    | VClosure (List String) Expr (List ( String, Value ))
-    | VRec String (List String) Expr (List ( String, Value ))
+    | VClosure (List String) Expr (Dict String Value)
+    | VRec String (List String) Expr (Dict String Value)
     | VBuiltin String (List Value)
 
 
@@ -71,6 +71,8 @@ type alias Globals =
     Dict String Decl
 
 
-{-| A local binding environment. -}
+{-| A local binding environment, keyed by name for O(log n) lookup (was a linear assoc-list scanned
+on every variable reference). Newer bindings shadow older ones via Dict.insert (overwrite), matching
+the previous prepend-then-first-match semantics. -}
 type alias Env =
-    List ( String, Value )
+    Dict String Value

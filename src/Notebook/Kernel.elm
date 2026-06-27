@@ -78,7 +78,7 @@ run source kernel =
 
 runExpr : Expr -> Int -> Kernel -> ( Output, Kernel )
 runExpr expr next kernel =
-    case Eval.evalExpr kernel.globals [] expr of
+    case Eval.evalExpr kernel.globals Dict.empty expr of
         Ok value ->
             ( OutValue value
             , { globals = bindBody expr kernel.globals, count = next }
@@ -108,7 +108,7 @@ runDecls source exprErr next kernel =
                 lastName =
                     decls |> List.reverse |> List.head |> Maybe.map Tuple.first |> Maybe.withDefault "_"
             in
-            case Eval.evalExpr merged [] (Var lastName) of
+            case Eval.evalExpr merged Dict.empty (Var lastName) of
                 Ok value ->
                     ( OutValue value
                     , { globals = bindBody (Var lastName) merged, count = next }

@@ -31,6 +31,7 @@ suite =
         , tableTests
         , preludeTests
         , controlFlowTests
+        , scopeTests
         , parsingTests
         , stringTests
         , valueHelperTests
@@ -255,6 +256,33 @@ controlFlowTests =
         , check "case on Nothing"
             "case List.head [] of\n    Just v ->\n        v\n\n    Nothing ->\n        0"
             (n 0)
+        ]
+
+
+
+-- SCOPE · SHADOWING · CLOSURES -----------------------------------------------
+
+
+{-| The local environment is a `Dict String Value` (was a linear assoc-list). These pin the
+behaviour that change must preserve: newer bindings shadow older ones (Dict.insert overwrites,
+matching the old prepend-then-first-match), closures capture their defining env persistently and
+independently, and recursive (VRec) bindings still see themselves. -}
+scopeTests : Test
+scopeTests =
+    describe "scope · shadowing · closures"
+        [ check "inner let shadows outer" "let x = 1 in let x = 2 in x" (n 2)
+        , check "lambda param shadows binding" "let x = 1 in (\\x -> x) 5" (n 5)
+        , check "outer binding visible after shadowing lambda" "let a = 1 in (\\a -> a) 2 + a" (n 3)
+        , check "closure captures its defining env" "let a = 10 in let f = \\b -> a + b in f 5" (n 15)
+        , check "recursion sees the bound name (VRec)"
+            "let fac = \\m -> if m <= 1 then 1 else m * fac (m - 1) in fac 5"
+            (n 120)
+        , check "closures keep independent captures"
+            "let mk = \\a -> (\\b -> a + b) in mk 100 1 + mk 200 1"
+            (n 302)
+        , check "case binding shadows but outer stays visible"
+            "let x = 1 in\ncase 9 of\n    y ->\n        y + x"
+            (n 10)
         ]
 
 

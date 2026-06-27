@@ -99,7 +99,7 @@ evalExpr globals env expr =
             Ok (VBool b)
 
         Var name ->
-            case lookup name env of
+            case Dict.get name env of
                 Just v ->
                     Ok v
 
@@ -107,10 +107,10 @@ evalExpr globals env expr =
                     case Dict.get name globals of
                         Just decl ->
                             if List.isEmpty decl.params then
-                                evalExpr globals [] decl.body
+                                evalExpr globals Dict.empty decl.body
 
                             else
-                                Ok (VClosure decl.params decl.body [])
+                                Ok (VClosure decl.params decl.body Dict.empty)
 
                         Nothing ->
                             if name == "pi" then
@@ -146,10 +146,10 @@ evalExpr globals env expr =
             case Dict.get name globals of
                 Just decl ->
                     if List.isEmpty decl.params then
-                        evalExpr globals [] decl.body
+                        evalExpr globals Dict.empty decl.body
 
                     else
-                        Ok (VClosure decl.params decl.body [])
+                        Ok (VClosure decl.params decl.body Dict.empty)
 
                 Nothing ->
                     Ok (VCtor name [])
@@ -191,11 +191,11 @@ evalExpr globals env expr =
         Let name boundExpr body ->
             case boundExpr of
                 Lam params lamBody ->
-                    evalExpr globals (( name, VRec name params lamBody env ) :: env) body
+                    evalExpr globals (Dict.insert name (VRec name params lamBody env) env) body
 
                 _ ->
                     evalExpr globals env boundExpr
-                        |> Result.andThen (\v -> evalExpr globals (( name, v ) :: env) body)
+                        |> Result.andThen (\v -> evalExpr globals (Dict.insert name v env) body)
 
         Lam params body ->
             Ok (VClosure params body env)
@@ -399,7 +399,7 @@ applyValue globals fn arg =
             applyClosure globals params body closedEnv arg
 
         VRec name params body closedEnv ->
-            applyClosure globals params body (( name, fn ) :: closedEnv) arg
+            applyClosure globals params body (Dict.insert name fn closedEnv) arg
 
         VCtor name args ->
             Ok (VCtor name (args ++ [ arg ]))
@@ -631,10 +631,10 @@ applyClosure globals params body closedEnv arg =
             Err "cannot apply a non-function"
 
         p :: [] ->
-            evalExpr globals (( p, arg ) :: closedEnv) body
+            evalExpr globals (Dict.insert p arg closedEnv) body
 
         p :: more ->
-            Ok (VClosure more body (( p, arg ) :: closedEnv))
+            Ok (VClosure more body (Dict.insert p arg closedEnv))
 
 
 evalCase : Globals -> Env -> Value -> List ( Pattern, Expr ) -> Result String Value
@@ -646,7 +646,7 @@ evalCase globals env subject branches =
         ( pat, body ) :: rest ->
             case matchPattern pat subject of
                 Just bindings ->
-                    evalExpr globals (bindings ++ env) body
+                    evalExpr globals (Dict.union (Dict.fromList bindings) env) body
 
                 Nothing ->
                     evalCase globals env subject rest
@@ -889,7 +889,7 @@ htmlToString =
 {-| Evaluates a single expression in an empty scope (used for messages and the simple REPL). -}
 eval : String -> String
 eval src =
-    case tokenize src |> Result.andThen parse |> Result.andThen (evalExpr Dict.empty []) of
+    case tokenize src |> Result.andThen parse |> Result.andThen (evalExpr Dict.empty Dict.empty) of
         Ok v ->
             renderValue v
 
@@ -910,7 +910,7 @@ evalProject files entry =
                     "Error: " ++ e
 
                 Ok expr ->
-                    case evalExpr globals [] expr of
+                    case evalExpr globals Dict.empty expr of
                         Ok v ->
                             renderValue v
 
@@ -946,7 +946,7 @@ stepFold globals model msgs acc =
             List.reverse acc
 
         line :: rest ->
-            case tokenize line |> Result.andThen parse |> Result.andThen (evalExpr globals []) of
+            case tokenize line |> Result.andThen parse |> Result.andThen (evalExpr globals Dict.empty) of
                 Err e ->
                     List.reverse (("✗ " ++ line ++ " -> " ++ e) :: acc)
 
@@ -961,7 +961,7 @@ stepFold globals model msgs acc =
 
 applyUpdate : Globals -> Value -> Value -> Result String Value
 applyUpdate globals msg model =
-    evalExpr globals [] (Var "update")
+    evalExpr globals Dict.empty (Var "update")
         |> Result.andThen (\u -> applyValue globals u msg)
         |> Result.andThen (\u1 -> applyValue globals u1 model)
 
@@ -972,7 +972,7 @@ formatStep globals label model =
         viewText =
             case evalGlobal globals "view" of
                 Ok _ ->
-                    case evalExpr globals [] (Var "view") |> Result.andThen (\f -> applyValue globals f model) of
+                    case evalExpr globals Dict.empty (Var "view") |> Result.andThen (\f -> applyValue globals f model) of
                         Ok v ->
                             "  view: " ++ renderValue v
 
@@ -988,7 +988,7 @@ formatStep globals label model =
 evalGlobal : Globals -> String -> Result String Value
 evalGlobal globals name =
     if findDecl globals name then
-        evalExpr globals [] (Var name)
+        evalExpr globals Dict.empty (Var name)
 
     else
         Err ("missing " ++ name)
@@ -1551,7 +1551,7 @@ appView files model =
 {-| {@link appView} over already-parsed globals. -}
 appViewOf : Globals -> Value -> Result String Value
 appViewOf globals model =
-    evalExpr globals [] (Var "view")
+    evalExpr globals Dict.empty (Var "view")
         |> Result.andThen (\f -> applyValue globals f model)
 
 
@@ -1559,7 +1559,7 @@ appViewOf globals model =
 a plain value) — what the editor renders for the selected file. -}
 mainValue : List ( String, String ) -> Result String Value
 mainValue files =
-    parseProject files |> Result.andThen (\globals -> evalExpr globals [] (Var "main"))
+    parseProject files |> Result.andThen (\globals -> evalExpr globals Dict.empty (Var "main"))
 
 
 {-| Applies an event handler (e.g. an `onInput` message constructor) to the event's string payload,
