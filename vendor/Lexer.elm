@@ -74,7 +74,7 @@ inlineTripleStrings src =
                             String.dropLeft (close + 3) afterOpen
 
                         escaped =
-                            escapeTripleBody (String.toList body) ""
+                            escapeTripleBody (String.toList body)
                     in
                     before ++ "\"" ++ escaped ++ "\"" ++ inlineTripleStrings rest
 
@@ -85,31 +85,39 @@ string except that *raw* double-quotes and newlines are allowed, so: raw `"` →
 `\n`, raw CR dropped, and any existing escape sequence (`\n`, `\t`, `\\`, `\"`, `\u{…}`, …) is passed
 through verbatim — crucially NOT re-escaped, which a blanket `\` → `\\` would do (turning the user's
 `\n` into a literal backslash-n). -}
-escapeTripleBody : List Char -> String -> String
-escapeTripleBody chars acc =
+escapeTripleBody : List Char -> String
+escapeTripleBody chars =
+    String.fromList (List.reverse (escapeTripleHelp chars []))
+
+
+{-| Builds the re-escaped body in reverse (O(1) cons per char) so a long triple-quoted string is
+re-escaped in linear time rather than quadratic. Each appended chunk is prepended reversed: e.g. the
+two output chars `\` then `n` become `'n' :: '\\' :: acc`. -}
+escapeTripleHelp : List Char -> List Char -> List Char
+escapeTripleHelp chars acc =
     case chars of
         [] ->
             acc
 
         '\u{000D}' :: rest ->
-            escapeTripleBody rest acc
+            escapeTripleHelp rest acc
 
         '\n' :: rest ->
-            escapeTripleBody rest (acc ++ "\\n")
+            escapeTripleHelp rest ('n' :: '\\' :: acc)
 
         '"' :: rest ->
-            escapeTripleBody rest (acc ++ "\\\"")
+            escapeTripleHelp rest ('"' :: '\\' :: acc)
 
         '\\' :: e :: rest ->
             -- An escape sequence: keep both chars as-is so the string lexer decodes it later.
-            escapeTripleBody rest (acc ++ String.fromList [ '\\', e ])
+            escapeTripleHelp rest (e :: '\\' :: acc)
 
         '\\' :: [] ->
             -- A trailing lone backslash (malformed); escape it so it can't swallow the closing quote.
-            acc ++ "\\\\"
+            '\\' :: '\\' :: acc
 
         c :: rest ->
-            escapeTripleBody rest (acc ++ String.fromChar c)
+            escapeTripleHelp rest (c :: acc)
 
 
 {-| Collapses each multi-line GLSL shader literal `[glsl| … |]` into a single-line string literal so
@@ -336,7 +344,7 @@ tokenizeHelp chars acc =
                 -- inlineTripleStrings before tokenizing, so only single-quoted strings reach here.
                 let
                     taken =
-                        takeString rest ""
+                        takeString rest
                 in
                 tokenizeHelp (Tuple.second taken) (TStr (Tuple.first taken) :: acc)
 
@@ -351,7 +359,7 @@ tokenizeHelp chars acc =
             else if isOpChar c then
                 let
                     taken =
-                        takeWhile isOpChar chars ""
+                        takeWhile isOpChar chars
                 in
                 case classifyOp (Tuple.first taken) of
                     Ok tok ->
@@ -371,7 +379,7 @@ tokenizeHelp chars acc =
             else if Char.isAlpha c || c == '_' then
                 let
                     taken =
-                        takeWhile isIdChar chars ""
+                        takeWhile isIdChar chars
 
                     word =
                         Tuple.first taken
@@ -413,7 +421,7 @@ readNumber chars =
             if (x == 'x' || x == 'X') && isHexChar hd then
                 let
                     ( hex, after ) =
-                        takeWhile isHexChar (hd :: rest) ""
+                        takeWhile isHexChar (hd :: rest)
                 in
                 Just ( toFloat (hexToInt hex), after )
 
@@ -428,7 +436,7 @@ readDecimal : List Char -> Maybe ( Float, List Char )
 readDecimal chars =
     let
         ( mant, rest1 ) =
-            takeWhile isNumChar chars ""
+            takeWhile isNumChar chars
 
         ( expPart, rest2 ) =
             readExponent rest1
@@ -444,7 +452,7 @@ readExponent chars =
             if (e == 'e' || e == 'E') && (sign == '+' || sign == '-') && Char.isDigit d then
                 let
                     ( ds, after ) =
-                        takeWhile Char.isDigit (d :: rest) ""
+                        takeWhile Char.isDigit (d :: rest)
                 in
                 ( String.fromChar e ++ String.fromChar sign ++ ds, after )
 
@@ -462,7 +470,7 @@ readExponentNoSign chars =
             if (e == 'e' || e == 'E') && Char.isDigit d then
                 let
                     ( ds, after ) =
-                        takeWhile Char.isDigit (d :: rest) ""
+                        takeWhile Char.isDigit (d :: rest)
                 in
                 ( String.fromChar e ++ ds, after )
 
@@ -478,18 +486,26 @@ isIdChar c =
     Char.isAlphaNum c || c == '_'
 
 
-takeWhile : (Char -> Bool) -> List Char -> String -> ( String, List Char )
-takeWhile pred chars acc =
+takeWhile : (Char -> Bool) -> List Char -> ( String, List Char )
+takeWhile pred chars =
+    takeWhileHelp pred chars []
+
+
+{-| Accumulates the matched chars in reverse (O(1) cons, not O(n) String `++` per char) and converts
+to a String once at the end — so reading an identifier/operator/number runs in time linear in its
+length rather than quadratic. -}
+takeWhileHelp : (Char -> Bool) -> List Char -> List Char -> ( String, List Char )
+takeWhileHelp pred chars acc =
     case chars of
         c :: rest ->
             if pred c then
-                takeWhile pred rest (acc ++ String.fromChar c)
+                takeWhileHelp pred rest (c :: acc)
 
             else
-                ( acc, chars )
+                ( String.fromList (List.reverse acc), chars )
 
         [] ->
-            ( acc, chars )
+            ( String.fromList (List.reverse acc), chars )
 
 
 {-| Reads a character literal `'c'` (or an escape like `'\n'`), given the opening `'` was consumed.
@@ -501,7 +517,7 @@ takeChar chars =
             -- A Unicode escape `'\u{HHHH}'`.
             let
                 ( hex, afterHex ) =
-                    takeWhile (\c -> c /= '}') rest ""
+                    takeWhile (\c -> c /= '}') rest
             in
             case afterHex of
                 '}' :: '\'' :: more ->
@@ -536,34 +552,42 @@ unescapeChar e =
             e
 
 
-takeString : List Char -> String -> ( String, List Char )
-takeString chars acc =
+takeString : List Char -> ( String, List Char )
+takeString chars =
+    takeStringHelp chars []
+
+
+{-| Decodes a string literal's body, accumulating the decoded chars in reverse (O(1) cons) and
+converting once — linear in the string length rather than quadratic from repeated String `++`. -}
+takeStringHelp : List Char -> List Char -> ( String, List Char )
+takeStringHelp chars acc =
     case chars of
         '"' :: rest ->
-            ( acc, rest )
+            ( String.fromList (List.reverse acc), rest )
 
         '\\' :: 'u' :: '{' :: rest ->
             -- A Unicode escape `\u{HHHH}`: read hex digits up to the closing brace.
             let
                 ( hex, afterHex ) =
-                    takeWhile (\c -> c /= '}') rest ""
+                    takeWhile (\c -> c /= '}') rest
             in
             case afterHex of
                 '}' :: more ->
-                    takeString more (acc ++ String.fromChar (Char.fromCode (hexToInt hex)))
+                    takeStringHelp more (Char.fromCode (hexToInt hex) :: acc)
 
                 _ ->
-                    takeString rest (acc ++ "\\u{")
+                    -- Malformed escape: keep the literal `\u{` (prepended reversed).
+                    takeStringHelp rest ('{' :: 'u' :: '\\' :: acc)
 
         '\\' :: e :: rest ->
             -- A backslash escape (`\n`, `\t`, `\r`, `\\`, `\"`, …); unescapeChar leaves others as-is.
-            takeString rest (acc ++ String.fromChar (unescapeChar e))
+            takeStringHelp rest (unescapeChar e :: acc)
 
         c :: rest ->
-            takeString rest (acc ++ String.fromChar c)
+            takeStringHelp rest (c :: acc)
 
         [] ->
-            ( acc, [] )
+            ( String.fromList (List.reverse acc), [] )
 
 
 {-| Parses a string of hex digits to an Int (case-insensitive); unknown digits count as 0. -}

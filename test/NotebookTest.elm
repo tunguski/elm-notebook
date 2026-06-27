@@ -270,6 +270,15 @@ stringTests =
         , check "join" "String.join \"-\" [ \"a\", \"b\", \"c\" ]" (s "a-b-c")
         , check "contains" "String.contains \"ell\" \"hello\"" (VBool True)
         , check "fromInt" "String.fromInt 42" (s "42")
+
+        -- String-literal decoding (lexer takeString / triple-string escaping) — these pin the
+        -- escape handling that the linear-time accumulator rewrite touched.
+        , check "escape newline" "String.length \"a\\nb\"" (n 3)
+        , check "escape backslash" "String.length \"a\\\\b\"" (n 3)
+        , check "escape quote" "\"q\\\"q\"" (s "q\"q")
+        , check "unicode escape" "\"\\u{41}\"" (s "A")
+        , check "triple string plain" "\"\"\"hi\"\"\"" (s "hi")
+        , check "triple string raw quote" "\"\"\"a\"b\"\"\"" (s "a\"b")
         ]
 
 
