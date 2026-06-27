@@ -1,76 +1,46 @@
 module Notebook.Value exposing
-    ( Value(..)
-    , Env
-    , Builtin
-    , typeName
+    ( typeName
     , equalValue
     , isTable
     , tableColumns
+    , is2D
+    , rows2D
     , numberToString
-    , toDisplayString
-    , toInline
+    , inlineValue
+    , displayValue
+    , fieldOf
     )
 
-{-| The dynamically-typed value a notebook expression evaluates to, and the kernel
-environment that maps names to values.
+{-| Display and introspection helpers over the interpreter's [`Lang.Value`](Lang#Value).
 
-Numbers are all `Float` (there is no separate `Int` — a notebook is for exploring data,
-not for type puzzles); a "table" is just a `VList` of `VRecord`s, which the view detects
-and renders as a grid. Functions come in two shapes: `VClosure` for user `\x -> …`
-lambdas (carrying the environment they captured) and `VBuiltin` for the standard library.
+The kernel evaluates to the real interpreter's value type (numbers, text, bools, chars, lists,
+records, tuples, constructors, functions). These helpers are what the view and the suggestion
+engine use: structural equality that is safe on functions, "is this a table / a 2-D grid",
+column extraction, and one-line / headline string renderings.
 
-@docs Value, Env, Builtin
-@docs typeName, equalValue, isTable, tableColumns
-@docs numberToString, toDisplayString, toInline
+@docs typeName, equalValue, isTable, tableColumns, is2D, rows2D
+@docs numberToString, inlineValue, displayValue, fieldOf
 
 -}
 
-import Dict exposing (Dict)
-import Notebook.Ast exposing (Expr)
+import Lang exposing (Value(..))
 
 
-{-| A value. `VClosure`/`VBuiltin` carry functions, so never compare two `Value`s with
-the built-in `==` (it throws on functions) — use [`equalValue`](#equalValue), which treats
-any function as unequal.
--}
-type Value
-    = VNum Float
-    | VStr String
-    | VBool Bool
-    | VList (List Value)
-    | VRecord (List ( String, Value ))
-    | VClosure String Expr Env
-    | VBuiltin Builtin
-
-
-{-| A standard-library function. It collects arguments until it has `arity` of them, then
-`fn` is run. `args` holds the arguments gathered so far (for partial application).
--}
-type alias Builtin =
-    { name : String
-    , arity : Int
-    , args : List Value
-    , fn : List Value -> Result String Value
-    }
-
-
-{-| The kernel environment: every name in scope mapped to its value. -}
-type alias Env =
-    Dict String Value
-
-
-{-| A short human name for a value's type, used in error messages. -}
+{-| A short human name for a value's type, for error messages and suggestions. -}
 typeName : Value -> String
-typeName v =
-    case v of
+typeName value =
+    case value of
         VNum _ ->
             "number"
+
+        VBool _ ->
+            "bool"
 
         VStr _ ->
             "text"
 
-        VBool _ ->
-            "bool"
+        VChar _ ->
+            "char"
 
         VList _ ->
             "list"
@@ -78,15 +48,18 @@ typeName v =
         VRecord _ ->
             "record"
 
-        VClosure _ _ _ ->
+        VTup _ ->
+            "tuple"
+
+        VCtor name _ ->
+            "constructor " ++ name
+
+        _ ->
             "function"
 
-        VBuiltin _ ->
-            "function"
 
-
-{-| Structural equality that is safe on values containing functions (functions are never
-equal to anything). Used by tests and by the `==` operator in the language.
+{-| Structural equality that is safe on values containing functions (a function is never equal
+to anything). Used by the tests and any value comparison in the UI.
 -}
 equalValue : Value -> Value -> Bool
 equalValue a b =
@@ -94,15 +67,23 @@ equalValue a b =
         ( VNum x, VNum y ) ->
             x == y
 
-        ( VStr x, VStr y ) ->
-            x == y
-
         ( VBool x, VBool y ) ->
             x == y
 
+        ( VStr x, VStr y ) ->
+            x == y
+
+        ( VChar x, VChar y ) ->
+            x == y
+
         ( VList xs, VList ys ) ->
-            (List.length xs == List.length ys)
-                && List.all identity (List.map2 equalValue xs ys)
+            listEqual xs ys
+
+        ( VTup xs, VTup ys ) ->
+            listEqual xs ys
+
+        ( VCtor n1 xs, VCtor n2 ys ) ->
+            n1 == n2 && listEqual xs ys
 
         ( VRecord xs, VRecord ys ) ->
             recordEqual xs ys
@@ -111,63 +92,50 @@ equalValue a b =
             False
 
 
+listEqual : List Value -> List Value -> Bool
+listEqual xs ys =
+    (List.length xs == List.length ys)
+        && List.all identity (List.map2 equalValue xs ys)
+
+
 recordEqual : List ( String, Value ) -> List ( String, Value ) -> Bool
 recordEqual xs ys =
     let
-        sortFields =
+        sort =
             List.sortBy Tuple.first
 
-        sx =
-            sortFields xs
-
-        sy =
-            sortFields ys
-
-        sameField ( k1, v1 ) ( k2, v2 ) =
+        same ( k1, v1 ) ( k2, v2 ) =
             k1 == k2 && equalValue v1 v2
     in
-    (List.length sx == List.length sy)
-        && List.all identity (List.map2 sameField sx sy)
+    (List.length xs == List.length ys)
+        && List.all identity (List.map2 same (sort xs) (sort ys))
 
 
-{-| Is this value a non-empty list whose every element is a record? Such a value is a
-"table" and the view renders it as a grid.
--}
+{-| A non-empty list whose every element is a record — rendered as a grid with a header row. -}
 isTable : Value -> Bool
-isTable v =
-    case v of
-        VList ((VRecord _) :: _) ->
-            List.all
-                (\x ->
-                    case x of
-                        VRecord _ ->
-                            True
-
-                        _ ->
-                            False
-                )
-                (asList v)
+isTable value =
+    case value of
+        VList ((VRecord _) :: rest) ->
+            List.all isRecord rest
 
         _ ->
             False
 
 
-asList : Value -> List Value
-asList v =
-    case v of
-        VList xs ->
-            xs
+isRecord : Value -> Bool
+isRecord value =
+    case value of
+        VRecord _ ->
+            True
 
         _ ->
-            []
+            False
 
 
-{-| The ordered column names of a table: the field names of the first row (rows are
-assumed homogeneous, as they are when produced by the table builtins).
--}
+{-| The column names of a table: the field names of its first row. -}
 tableColumns : Value -> List String
-tableColumns v =
-    case v of
+tableColumns value =
+    case value of
         VList ((VRecord fields) :: _) ->
             List.map Tuple.first fields
 
@@ -175,8 +143,67 @@ tableColumns v =
             []
 
 
-{-| Render a `Float` the way a notebook should: integers without a trailing `.0`, other
-numbers trimmed to a sensible precision.
+{-| A non-empty list whose every element is itself a list (and which is not a table) — a 2-D
+array, rendered as a header-less grid.
+-}
+is2D : Value -> Bool
+is2D value =
+    case value of
+        VList ((VList _) :: rest) ->
+            List.all isList rest
+
+        _ ->
+            False
+
+
+isList : Value -> Bool
+isList value =
+    case value of
+        VList _ ->
+            True
+
+        _ ->
+            False
+
+
+{-| The rows of a 2-D array. -}
+rows2D : Value -> List (List Value)
+rows2D value =
+    case value of
+        VList items ->
+            List.map
+                (\row ->
+                    case row of
+                        VList cells ->
+                            cells
+
+                        other ->
+                            [ other ]
+                )
+                items
+
+        _ ->
+            []
+
+
+{-| Look up a record field. -}
+fieldOf : String -> Value -> Maybe Value
+fieldOf name value =
+    case value of
+        VRecord fields ->
+            case List.filter (\( k, _ ) -> k == name) fields of
+                ( _, v ) :: _ ->
+                    Just v
+
+                [] ->
+                    Nothing
+
+        _ ->
+            Nothing
+
+
+{-| Render a `Float` the way a notebook should: integers without a trailing `.0`, others trimmed
+to a sensible precision.
 -}
 numberToString : Float -> String
 numberToString n =
@@ -194,56 +221,74 @@ numberToString n =
         String.fromInt (round n)
 
     else
-        let
-            rounded =
-                toFloat (round (n * 1.0e6)) / 1.0e6
-        in
-        String.fromFloat rounded
+        String.fromFloat (toFloat (round (n * 1.0e6)) / 1.0e6)
 
 
-{-| A one-line, unambiguous rendering of a value (strings quoted) for inline display, the
-output gutter and error messages.
--}
-toInline : Value -> String
-toInline v =
-    case v of
+{-| A one-line, unambiguous rendering (strings quoted) for inline display and table cells. -}
+inlineValue : Value -> String
+inlineValue value =
+    case value of
         VNum n ->
             numberToString n
+
+        VBool b ->
+            boolText b
 
         VStr s ->
             "\"" ++ s ++ "\""
 
-        VBool b ->
-            if b then
-                "True"
-
-            else
-                "False"
+        VChar c ->
+            "'" ++ String.fromChar c ++ "'"
 
         VList xs ->
-            "[" ++ String.join ", " (List.map toInline xs) ++ "]"
+            "[" ++ String.join ", " (List.map inlineValue xs) ++ "]"
+
+        VTup xs ->
+            "(" ++ String.join ", " (List.map inlineValue xs) ++ ")"
 
         VRecord fields ->
             "{ "
-                ++ String.join ", "
-                    (List.map (\( k, val ) -> k ++ " = " ++ toInline val) fields)
+                ++ String.join ", " (List.map (\( k, v ) -> k ++ " = " ++ inlineValue v) fields)
                 ++ " }"
 
-        VClosure _ _ _ ->
+        VCtor name [] ->
+            name
+
+        VCtor name args ->
+            name ++ " " ++ String.join " " (List.map inlineAtom args)
+
+        _ ->
             "<function>"
 
-        VBuiltin b ->
-            "<function:" ++ b.name ++ ">"
+
+{-| Like [`inlineValue`](#inlineValue) but parenthesises compound constructor arguments. -}
+inlineAtom : Value -> String
+inlineAtom value =
+    case value of
+        VCtor _ (_ :: _) ->
+            "(" ++ inlineValue value ++ ")"
+
+        _ ->
+            inlineValue value
 
 
-{-| Like [`toInline`](#toInline) but strings are shown unquoted — used when the value is the
-final, headline output of a cell.
+{-| Like [`inlineValue`](#inlineValue) but bare strings are unquoted — for the headline scalar
+output of a cell.
 -}
-toDisplayString : Value -> String
-toDisplayString v =
-    case v of
+displayValue : Value -> String
+displayValue value =
+    case value of
         VStr s ->
             s
 
         _ ->
-            toInline v
+            inlineValue value
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "True"
+
+    else
+        "False"

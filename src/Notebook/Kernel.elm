@@ -1,81 +1,177 @@
 module Notebook.Kernel exposing (Kernel, empty, run, names)
 
-{-| The notebook **kernel**: the stateful engine that executes code cells, exactly the role
-the Python kernel plays in Jupyter.
+{-| The notebook **kernel**: the stateful engine that executes code cells, the role the Python
+process plays in Jupyter — but here the language is real Elm, run by the vendored
+[`elm-in-elm` interpreter](Eval) (`Lexer` → `Parser` → `Eval.evalExpr`).
 
-A kernel is an environment (the names defined so far) plus an execution counter. Running a
-code cell evaluates its source against the current environment and returns the
-[`Output`](Notebook-Cell#Output) together with the new kernel state. A top-level
-`name = expr` binding publishes `name` so later cells can use it; every successful run also
-binds `_` to the value just produced, so cells can be chained REPL-style.
+A kernel is a set of top-level definitions ([`Lang.Globals`](Lang#Globals) — one
+mutually-recursive scope, seeded with [`Notebook.Prelude`](Notebook-Prelude)) plus an execution
+counter. Running a cell:
+
+  - a bare expression is evaluated against the globals and its value shown;
+  - a `name = expr` (or `name args = body`) declaration is merged into the globals so later cells
+    can use it;
+  - either way `_` is bound to the value just produced, for REPL-style chaining.
+
+Detection is expression-first: if the source parses as an expression it is one; otherwise it is
+parsed as a declaration. This is unambiguous (`x = 5` is not a valid expression, `let … in …`
+is) and means `case`, custom record literals, tuples and the whole real-Elm grammar Just Work.
 
 @docs Kernel, empty, run, names
 
 -}
 
 import Dict
-import Notebook.Ast exposing (CellForm(..))
+import Eval
+import Lang exposing (Decl, Expr(..), Globals, Value)
+import Lexer exposing (Token(..))
 import Notebook.Cell exposing (Output(..))
-import Notebook.Eval as Eval
-import Notebook.Parser as Parser
-import Notebook.Value exposing (Env, Value)
+import Notebook.Prelude as Prelude
+import Parser
 
 
-{-| Kernel state: the live environment and how many cells have been executed. -}
+{-| Kernel state: the live global definitions and how many cells have run. -}
 type alias Kernel =
-    { env : Env
+    { globals : Globals
     , count : Int
     }
 
 
-{-| A fresh kernel preloaded with the standard library. -}
+{-| A fresh kernel preloaded with the prelude (`mean`, `groupBy`, `unique`, …) on top of the
+interpreter's built-in `List`/`String`/`Dict`/math libraries.
+-}
 empty : Kernel
 empty =
-    { env = Eval.defaultEnv, count = 0 }
+    { globals =
+        Parser.parseProject [ ( "Prelude", Prelude.source ) ]
+            |> Result.withDefault Dict.empty
+    , count = 0
+    }
 
 
-{-| The names currently in scope (standard library + everything defined so far). -}
+{-| The names currently in scope (prelude + everything defined so far). -}
 names : Kernel -> List String
 names kernel =
-    Dict.keys kernel.env
+    Dict.keys kernel.globals
 
 
-{-| Run a code cell's source against the kernel, returning its output and the next kernel
-state. The execution count always advances — even on error — like a real notebook.
+{-| Run a code cell's source, returning its output and the next kernel state. The execution
+count advances on every run, even on error, like a real notebook. Empty cells are a no-op.
 -}
 run : String -> Kernel -> ( Output, Kernel )
 run source kernel =
-    let
-        n =
-            kernel.count + 1
-    in
-    case Parser.parseCell source of
+    if String.trim source == "" then
+        ( OutNone, kernel )
+
+    else
+        let
+            next =
+                kernel.count + 1
+        in
+        case Lexer.tokenize source |> Result.andThen Parser.parse of
+            Ok expr ->
+                runExpr expr next kernel
+
+            Err exprErr ->
+                runDecls source exprErr next kernel
+
+
+runExpr : Expr -> Int -> Kernel -> ( Output, Kernel )
+runExpr expr next kernel =
+    case Eval.evalExpr kernel.globals [] expr of
+        Ok value ->
+            ( OutValue value
+            , { globals = bindBody expr kernel.globals, count = next }
+            )
+
         Err message ->
-            ( OutError message, { kernel | count = n } )
+            ( OutError message, { kernel | count = next } )
 
-        Ok (CBind name expr) ->
-            case Eval.eval kernel.env expr of
+
+runDecls : String -> String -> Int -> Kernel -> ( Output, Kernel )
+runDecls source exprErr next kernel =
+    case Parser.parseModule source of
+        Ok [] ->
+            if isIgnorable source then
+                -- Only comments / type or import headers — nothing to evaluate.
+                ( OutNone, { kernel | count = next } )
+
+            else
+                -- Neither an expression nor a declaration — report the expression error.
+                ( OutError exprErr, { kernel | count = next } )
+
+        Ok decls ->
+            let
+                merged =
+                    List.foldl (\( name, decl ) g -> Dict.insert name decl g) kernel.globals decls
+
+                lastName =
+                    decls |> List.reverse |> List.head |> Maybe.map Tuple.first |> Maybe.withDefault "_"
+            in
+            case Eval.evalExpr merged [] (Var lastName) of
                 Ok value ->
                     ( OutValue value
-                    , { env = bind name value kernel.env, count = n }
+                    , { globals = bindBody (Var lastName) merged, count = next }
                     )
 
                 Err message ->
-                    ( OutError message, { kernel | count = n } )
+                    ( OutError message, { globals = merged, count = next } )
 
-        Ok (CBare expr) ->
-            case Eval.eval kernel.env expr of
-                Ok value ->
-                    ( OutValue value
-                    , { env = Dict.insert "_" value kernel.env, count = n }
-                    )
-
-                Err message ->
-                    ( OutError message, { kernel | count = n } )
+        Err declErr ->
+            ( OutError (chooseError source exprErr declErr), { kernel | count = next } )
 
 
-bind : String -> Value -> Env -> Env
-bind name value env =
-    env
-        |> Dict.insert name value
-        |> Dict.insert "_" value
+{-| Bind `_` to the result of evaluating `body`, so the next cell can refer to it. -}
+bindBody : Expr -> Globals -> Globals
+bindBody body globals =
+    Dict.insert "_" (Decl "_" [] body) globals
+
+
+{-| When neither parse succeeded, show the message for the form the source most looks like. -}
+chooseError : String -> String -> String -> String
+chooseError source exprErr declErr =
+    if looksLikeBinding source then
+        declErr
+
+    else
+        exprErr
+
+
+{-| A cell that legitimately produces no declarations: a comment, or a `module`/`import`/`type`/
+`port` header the parser skips.
+-}
+isIgnorable : String -> Bool
+isIgnorable source =
+    let
+        trimmed =
+            String.trimLeft source
+
+        firstWord =
+            trimmed |> String.words |> List.head |> Maybe.withDefault ""
+    in
+    String.startsWith "--" trimmed
+        || (trimmed == "")
+        || List.member firstWord [ "module", "import", "type", "port" ]
+
+
+looksLikeBinding : String -> Bool
+looksLikeBinding source =
+    case Lexer.tokenize source of
+        Ok ((TId _) :: rest) ->
+            scanForEquals rest
+
+        _ ->
+            False
+
+
+scanForEquals : List Token -> Bool
+scanForEquals tokens =
+    case tokens of
+        TEquals :: _ ->
+            True
+
+        (TId _) :: rest ->
+            scanForEquals rest
+
+        _ ->
+            False

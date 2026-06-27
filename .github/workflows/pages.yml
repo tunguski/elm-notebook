@@ -57,8 +57,8 @@ jobs:
           set +e
           java -jar elm-lang/target/elm.jar test --report=json \
             test/NotebookTest.elm \
-            src/Notebook/Ast.elm src/Notebook/Value.elm src/Notebook/Lexer.elm \
-            src/Notebook/Parser.elm src/Notebook/Eval.elm src/Notebook/Cell.elm \
+            vendor/Lang.elm vendor/Lexer.elm vendor/Parser.elm vendor/Eval.elm \
+            src/Notebook/Prelude.elm src/Notebook/Value.elm src/Notebook/Cell.elm \
             src/Notebook/Kernel.elm src/Notebook/Doc.elm src/Notebook/Suggest.elm > report.json
           code=$?
           set -e

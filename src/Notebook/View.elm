@@ -1,34 +1,40 @@
 module Notebook.View exposing (Config, notebook, suggestionsPanel, valueHtml, markdownHtml)
 
-{-| The HTML view of a notebook: editable cells, their outputs (scalars, lists, tables,
-errors), a tiny live Markdown renderer for prose cells, and the suggestions side-panel.
+{-| The HTML view of a notebook: syntax-highlighted, auto-growing editors, outputs rendered as
+scalars / records / tables (recursively, so nested tables nest) / headerless 2-D grids / errors,
+a small live Markdown renderer (with nested lists), and the suggestions side-panel.
 
-The view is decoupled from any application via a [`Config`](#Config) record of message
-constructors — the host (`Main`) decides what each button does. All styling is class-based
-(see `src/notebook.css`); nothing here reaches outside the notebook.
+Editing uses the vendored [`CodeEditor`](CodeEditor) widget (a transparent `<textarea>` over a
+highlighted `<pre>` — the same technique as elm-editor), which grows to its content so no cell
+ever shows a scrollbar. The view is decoupled from any application via a [`Config`](#Config) of
+message constructors.
 
 @docs Config, notebook, suggestionsPanel, valueHtml, markdownHtml
 
 -}
 
-import Html exposing (Html, a, button, div, h2, h3, h4, li, p, span, strong, table, tbody, td, text, textarea, th, thead, tr, ul)
+import CodeEditor
+import Highlight
+import Html exposing (Html, a, button, div, h2, h3, h4, li, p, span, strong, table, tbody, td, text, th, thead, tr, ul)
 import Html.Attributes as HA
 import Html.Events as HE
+import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
 import Notebook.Doc exposing (Doc)
 import Notebook.Suggest exposing (Suggestion)
-import Notebook.Value as Value exposing (Value(..))
+import Notebook.Value as Value
 
 
 {-| The callbacks the host wires up for the notebook's interactive controls. -}
 type alias Config msg =
-    { onEdit : Int -> String -> msg
+    { onEdit : Int -> String -> Int -> msg
     , onRun : Int -> msg
     , onDelete : Int -> msg
     , onMoveUp : Int -> msg
     , onMoveDown : Int -> msg
     , onConvert : Int -> CellKind -> msg
     , onInsert : Suggestion -> msg
+    , caretOf : Int -> Int
     }
 
 
@@ -59,7 +65,13 @@ codeCellView config cell =
         [ div [ HA.class "nb-gutter" ]
             [ span [ HA.class "nb-prompt" ] [ text (promptLabel "In" cell.count) ] ]
         , div [ HA.class "nb-body" ]
-            [ sourceEditor config cell
+            [ CodeEditor.view
+                { source = cell.source
+                , caret = config.caretOf cell.id
+                , gutter = True
+                , highlight = Highlight.segments
+                , onChange = config.onEdit cell.id
+                }
             , cellToolbar config cell
             , outputView cell.output cell.count
             ]
@@ -72,23 +84,21 @@ markdownCellView config cell =
         [ div [ HA.class "nb-gutter" ] [ span [ HA.class "nb-prompt nb-prompt-md" ] [ text "md" ] ]
         , div [ HA.class "nb-body" ]
             [ markdownHtml cell.source
-            , sourceEditor config cell
+            , CodeEditor.view
+                { source = cell.source
+                , caret = config.caretOf cell.id
+                , gutter = False
+                , highlight = plainSegments
+                , onChange = config.onEdit cell.id
+                }
             , cellToolbar config cell
             ]
         ]
 
 
-sourceEditor : Config msg -> Cell -> Html msg
-sourceEditor config cell =
-    textarea
-        [ HA.class "nb-source"
-        , HA.value cell.source
-        , HA.placeholder (placeholderFor cell.kind)
-        , HA.attribute "rows" (String.fromInt (editorRows cell.source))
-        , HA.attribute "spellcheck" "false"
-        , HE.onInput (config.onEdit cell.id)
-        ]
-        []
+plainSegments : String -> List ( String, String )
+plainSegments s =
+    [ ( "", s ) ]
 
 
 cellToolbar : Config msg -> Cell -> Html msg
@@ -156,40 +166,43 @@ promptLabel tag count =
             tag ++ " [ ]"
 
 
-placeholderFor : CellKind -> String
-placeholderFor kind =
-    case kind of
-        Code ->
-            "an expression, e.g.  mean (column \"salary\" people)"
 
-        Markdown ->
-            "# A heading, then notes in **markdown**…"
+-- VALUE RENDERING (recursive) ------------------------------------------------
 
 
-editorRows : String -> Int
-editorRows source =
-    String.lines source |> List.length |> clamp 2 20
-
-
-
--- VALUE RENDERING ------------------------------------------------------------
-
-
-{-| Render a value: tables become grids, records become key/value tables, everything else a
-typed, monospaced scalar.
+{-| Render a value. Tables become grids (with a header row), 2-D arrays headerless grids,
+records key/value tables, and any nested record/list inside a cell renders as a nested table —
+all the way down.
 -}
 valueHtml : Value -> Html msg
 valueHtml value =
     if Value.isTable value then
         tableHtml value
 
+    else if Value.is2D value then
+        grid2D value
+
     else
         case value of
             VRecord fields ->
                 recordHtml fields
 
+            VList items ->
+                if List.all isScalar items then
+                    scalarSpan value
+
+                else
+                    stackHtml items
+
+            VTup items ->
+                if List.all isScalar items then
+                    scalarSpan value
+
+                else
+                    tupleHtml items
+
             _ ->
-                span [ HA.class (scalarClass value) ] [ text (scalarText value) ]
+                scalarSpan value
 
 
 tableHtml : Value -> Html msg
@@ -199,81 +212,79 @@ tableHtml value =
             Value.tableColumns value
 
         rows =
-            case value of
-                VList xs ->
-                    xs
-
-                _ ->
-                    []
+            itemsOf value
     in
-    div [ HA.class "nb-table-wrap" ]
-        [ table [ HA.class "nb-table" ]
-            [ thead [] [ tr [] (List.map (\c -> th [] [ text c ]) cols) ]
-            , tbody [] (List.map (tableRow cols) rows)
-            ]
+    wrapTable
+        [ thead [] [ tr [] (List.map (\c -> th [] [ text c ]) cols) ]
+        , tbody [] (List.map (tableRow cols) rows)
         ]
 
 
 tableRow : List String -> Value -> Html msg
 tableRow cols row =
-    case row of
-        VRecord fields ->
-            tr [] (List.map (\c -> td [] [ cellHtml (lookupField c fields) ]) cols)
-
-        _ ->
-            tr [] [ td [] [ valueHtml row ] ]
+    tr [] (List.map (\c -> td [] [ cellHtml (Value.fieldOf c row) ]) cols)
 
 
 cellHtml : Maybe Value -> Html msg
 cellHtml maybeValue =
     case maybeValue of
         Just value ->
-            span [ HA.class (scalarClass value) ] [ text (scalarText value) ]
+            valueHtml value
 
         Nothing ->
             text ""
 
 
-recordHtml : List ( String, Value ) -> Html msg
-recordHtml fields =
-    div [ HA.class "nb-table-wrap" ]
-        [ table [ HA.class "nb-table nb-record" ]
-            [ tbody []
-                (List.map
-                    (\( k, v ) ->
-                        tr []
-                            [ th [] [ text k ]
-                            , td [] [ span [ HA.class (scalarClass v) ] [ text (scalarText v) ] ]
-                            ]
-                    )
-                    fields
-                )
-            ]
+grid2D : Value -> Html msg
+grid2D value =
+    wrapTable
+        [ tbody []
+            (List.map
+                (\cells -> tr [] (List.map (\c -> td [] [ valueHtml c ]) cells))
+                (Value.rows2D value)
+            )
         ]
 
 
-lookupField : String -> List ( String, Value ) -> Maybe Value
-lookupField key fields =
-    case fields of
-        ( k, v ) :: rest ->
-            if k == key then
-                Just v
+recordHtml : List ( String, Value ) -> Html msg
+recordHtml fields =
+    wrapTable
+        [ tbody []
+            (List.map
+                (\( k, v ) -> tr [] [ th [] [ text k ], td [] [ valueHtml v ] ])
+                fields
+            )
+        ]
 
-            else
-                lookupField key rest
 
-        [] ->
-            Nothing
+tupleHtml : List Value -> Html msg
+tupleHtml items =
+    wrapTable [ tbody [] [ tr [] (List.map (\v -> td [] [ valueHtml v ]) items) ] ]
+
+
+stackHtml : List Value -> Html msg
+stackHtml items =
+    div [ HA.class "nb-stack" ] (List.map (\v -> div [ HA.class "nb-stack-item" ] [ valueHtml v ]) items)
+
+
+wrapTable : List (Html msg) -> Html msg
+wrapTable inner =
+    div [ HA.class "nb-table-wrap" ] [ table [ HA.class "nb-table" ] inner ]
+
+
+scalarSpan : Value -> Html msg
+scalarSpan value =
+    span [ HA.class (scalarClass value) ] [ text (scalarText value) ]
 
 
 scalarText : Value -> String
 scalarText value =
     case value of
-        VStr str ->
-            str
+        VStr s ->
+            s
 
         _ ->
-            Value.toInline value
+            Value.inlineValue value
 
 
 scalarClass : Value -> String
@@ -288,8 +299,43 @@ scalarClass value =
         VBool _ ->
             "nb-v nb-v-bool"
 
+        VChar _ ->
+            "nb-v nb-v-str"
+
         _ ->
             "nb-v nb-v-other"
+
+
+isScalar : Value -> Bool
+isScalar value =
+    case value of
+        VNum _ ->
+            True
+
+        VBool _ ->
+            True
+
+        VStr _ ->
+            True
+
+        VChar _ ->
+            True
+
+        VCtor _ [] ->
+            True
+
+        _ ->
+            False
+
+
+itemsOf : Value -> List Value
+itemsOf value =
+    case value of
+        VList items ->
+            items
+
+        _ ->
+            []
 
 
 
@@ -341,22 +387,28 @@ firstLine source =
 
 
 
--- MINIMAL MARKDOWN -----------------------------------------------------------
+-- MINIMAL MARKDOWN (headings, nested lists, paragraphs; **bold**, `code`) -----
 
 
-{-| Render a small Markdown subset (headings, bullet lists, paragraphs; inline `**bold**`
-and `` `code` ``) used by prose cells. -}
+{-| Render a small Markdown subset used by prose cells: headings, nested bullet lists,
+paragraphs, and inline `**bold**` / `` `code` ``. -}
 markdownHtml : String -> Html msg
 markdownHtml source =
     div [ HA.class "nb-md" ]
-        (blocksToHtml (groupLines (List.map classifyLine (String.lines source)) []))
+        (blocksToHtml (groupBlocks (List.map classifyLine (String.lines source)) []))
 
 
 type Line
     = LHead Int String
-    | LItem String
+    | LItem Int String
     | LText String
     | LBlank
+
+
+type Block
+    = BHead Int String
+    | BPara (List String)
+    | BList (List ( Int, String ))
 
 
 classifyLine : String -> Line
@@ -364,12 +416,18 @@ classifyLine raw =
     let
         line =
             String.trimRight raw
-    in
-    if String.startsWith "#" line then
-        LHead (countHashes line) (String.trimLeft (String.dropLeft (countHashes line) line))
 
-    else if String.startsWith "- " line then
-        LItem (String.dropLeft 2 line)
+        trimmedLeft =
+            String.trimLeft line
+
+        indent =
+            String.length line - String.length trimmedLeft
+    in
+    if String.startsWith "#" trimmedLeft then
+        LHead (countHashes trimmedLeft) (String.trimLeft (String.dropLeft (countHashes trimmedLeft) trimmedLeft))
+
+    else if String.startsWith "- " trimmedLeft then
+        LItem indent (String.dropLeft 2 trimmedLeft)
 
     else if String.trim line == "" then
         LBlank
@@ -380,8 +438,7 @@ classifyLine raw =
 
 countHashes : String -> Int
 countHashes line =
-    String.toList line
-        |> takeWhileCount ((==) '#')
+    String.toList line |> takeWhileCount ((==) '#')
 
 
 takeWhileCount : (Char -> Bool) -> List Char -> Int
@@ -398,45 +455,37 @@ takeWhileCount pred chars =
             0
 
 
-{-| Group classified lines into blocks: runs of text become a paragraph, runs of items a
-list, headings stand alone. Carries pending paragraph/item buffers. -}
-groupLines : List Line -> List Line -> List Block
-groupLines lines pending =
+groupBlocks : List Line -> List Line -> List Block
+groupBlocks lines pending =
     case lines of
         [] ->
             flushPending pending
 
         (LHead level body) :: rest ->
-            flushPending pending ++ (BHead level body :: groupLines rest [])
+            flushPending pending ++ (BHead level body :: groupBlocks rest [])
 
         LBlank :: rest ->
-            flushPending pending ++ groupLines rest []
+            flushPending pending ++ groupBlocks rest []
 
-        ((LItem _) as item) :: rest ->
+        ((LItem _ _) as item) :: rest ->
             if isItemBuffer pending then
-                groupLines rest (pending ++ [ item ])
+                groupBlocks rest (pending ++ [ item ])
 
             else
-                flushPending pending ++ groupLines rest [ item ]
+                flushPending pending ++ groupBlocks rest [ item ]
 
         ((LText _) as txt) :: rest ->
             if isTextBuffer pending then
-                groupLines rest (pending ++ [ txt ])
+                groupBlocks rest (pending ++ [ txt ])
 
             else
-                flushPending pending ++ groupLines rest [ txt ]
-
-
-type Block
-    = BHead Int String
-    | BPara (List String)
-    | BList (List String)
+                flushPending pending ++ groupBlocks rest [ txt ]
 
 
 isItemBuffer : List Line -> Bool
 isItemBuffer pending =
     case pending of
-        (LItem _) :: _ ->
+        (LItem _ _) :: _ ->
             True
 
         _ ->
@@ -459,18 +508,18 @@ flushPending pending =
         [] ->
             []
 
-        (LItem _) :: _ ->
-            [ BList (List.filterMap itemText pending) ]
+        (LItem _ _) :: _ ->
+            [ BList (List.filterMap itemPair pending) ]
 
         _ ->
             [ BPara (List.filterMap textText pending) ]
 
 
-itemText : Line -> Maybe String
-itemText line =
+itemPair : Line -> Maybe ( Int, String )
+itemPair line =
     case line of
-        LItem s ->
-            Just s
+        LItem indent s ->
+            Just ( indent, s )
 
         _ ->
             Nothing
@@ -501,7 +550,48 @@ blockToHtml block =
             p [] (inline (String.join " " lines))
 
         BList items ->
-            ul [] (List.map (\i -> li [] (inline i)) items)
+            ul [] (nestItems items)
+
+
+{-| Build (possibly nested) `<li>`s: items more indented than the current one become a nested
+`<ul>` inside the preceding `<li>`. -}
+nestItems : List ( Int, String ) -> List (Html msg)
+nestItems items =
+    case items of
+        [] ->
+            []
+
+        ( indent, body ) :: rest ->
+            let
+                ( children, remaining ) =
+                    spanWhile (\( i, _ ) -> i > indent) rest
+
+                childHtml =
+                    if List.isEmpty children then
+                        []
+
+                    else
+                        [ ul [] (nestItems children) ]
+            in
+            li [] (inline body ++ childHtml) :: nestItems remaining
+
+
+spanWhile : (a -> Bool) -> List a -> ( List a, List a )
+spanWhile pred xs =
+    case xs of
+        x :: rest ->
+            if pred x then
+                let
+                    ( taken, remaining ) =
+                        spanWhile pred rest
+                in
+                ( x :: taken, remaining )
+
+            else
+                ( [], xs )
+
+        [] ->
+            ( [], [] )
 
 
 headingTag : Int -> List (Html msg) -> Html msg
@@ -516,7 +606,6 @@ headingTag level children =
         h4 [ HA.class "nb-h3" ] children
 
 
-{-| Inline formatting: `**bold**` and `` `code` ``, otherwise plain text. -}
 inline : String -> List (Html msg)
 inline source =
     inlineScan (String.toList source) [] []

@@ -7,13 +7,11 @@ module Notebook.Doc exposing
     )
 
 {-| The notebook **document**: an ordered list of [`Cell`](Notebook-Cell#Cell)s plus the
-[`Kernel`](Notebook-Kernel#Kernel) that runs them — the Jupyter `.ipynb` to the kernel's
-Python process.
+[`Kernel`](Notebook-Kernel#Kernel) that runs them — the Jupyter `.ipynb` to the kernel's process.
 
-Editing operations (add / move / remove / retype / edit) are pure transformations of the
-document. Running is, too: [`runAll`](#runAll) re-executes every code cell from a fresh
-kernel, so the displayed outputs are always a faithful, reproducible function of the source —
-no hidden out-of-order state, which is the classic notebook footgun.
+Editing (add / move / remove / retype / edit) and running are pure transformations.
+[`runAll`](#runAll) re-executes every code cell from a fresh kernel, so the displayed outputs
+are always a faithful, reproducible function of the source — no hidden out-of-order state.
 
 @docs Doc, empty, fromSpec
 @docs append, insertAfter, remove, moveUp, moveDown
@@ -23,9 +21,9 @@ no hidden out-of-order state, which is the classic notebook footgun.
 
 -}
 
+import Lang exposing (Value)
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
 import Notebook.Kernel as Kernel exposing (Kernel)
-import Notebook.Value exposing (Value)
 
 
 {-| A notebook: its cells, the id to hand the next new cell, and the current kernel. -}
@@ -45,10 +43,7 @@ empty =
 {-| Build a notebook from a list of `(kind, source)` pairs — used by the lesson templates. -}
 fromSpec : List ( CellKind, String ) -> Doc
 fromSpec spec =
-    List.foldl
-        (\( kind, source ) doc -> append kind source doc)
-        empty
-        spec
+    List.foldl (\( kind, source ) doc -> append kind source doc) empty spec
 
 
 newCell : Int -> CellKind -> String -> Cell
@@ -122,22 +117,16 @@ swapBefore targetId cells =
             cells
 
 
-{-| Replace a cell's source. The output is cleared so a stale result is never shown next to
-edited source (the cell shows as un-run until executed again).
--}
+{-| Replace a cell's source, clearing the (now stale) output. -}
 setSource : Int -> String -> Doc -> Doc
 setSource targetId source doc =
-    mapCell targetId
-        (\c -> { c | source = source, output = OutNone, count = Nothing })
-        doc
+    mapCell targetId (\c -> { c | source = source, output = OutNone, count = Nothing }) doc
 
 
 {-| Switch a cell between Markdown and Code, clearing any stale output. -}
 setKind : Int -> CellKind -> Doc -> Doc
 setKind targetId kind doc =
-    mapCell targetId
-        (\c -> { c | kind = kind, output = OutNone, count = Nothing })
-        doc
+    mapCell targetId (\c -> { c | kind = kind, output = OutNone, count = Nothing }) doc
 
 
 mapCell : Int -> (Cell -> Cell) -> Doc -> Doc
@@ -162,9 +151,9 @@ runAll doc =
     runFrom Nothing doc
 
 
-{-| Re-run from a fresh kernel up to and including the cell with the given id; cells after it
-keep their previous outputs. (Used by the per-cell "Run" button — running a cell guarantees
-every cell above it has run first, so its result is always consistent.)
+{-| Re-run from a fresh kernel up to and including the given cell; later cells keep their
+previous outputs. (Used by per-cell "Run", so a cell's result is always consistent with every
+cell above it.)
 -}
 runThrough : Int -> Doc -> Doc
 runThrough targetId doc =
@@ -190,10 +179,17 @@ runFrom stopAt doc =
                         let
                             ( output, kernel2 ) =
                                 Kernel.run cell.source kernel
+
+                            count =
+                                if output == OutNone && cell.source == "" then
+                                    Nothing
+
+                                else
+                                    Just kernel2.count
                         in
                         ( kernel2
                         , stopAt == Just cell.id
-                        , { cell | output = output, count = Just kernel2.count } :: acc
+                        , { cell | output = output, count = count } :: acc
                         )
 
         ( finalKernel, _, reversed ) =
@@ -207,8 +203,7 @@ clearOutputs : Doc -> Doc
 clearOutputs doc =
     { doc
         | kernel = Kernel.empty
-        , cells =
-            List.map (\c -> { c | output = OutNone, count = Nothing }) doc.cells
+        , cells = List.map (\c -> { c | output = OutNone, count = Nothing }) doc.cells
     }
 
 
@@ -219,7 +214,7 @@ find targetId doc =
 
 
 {-| The value produced by the most recent code cell that yielded one — what the suggestion
-engine looks at to propose a sensible next step.
+engine inspects to propose a next step.
 -}
 lastValue : Doc -> Maybe Value
 lastValue doc =

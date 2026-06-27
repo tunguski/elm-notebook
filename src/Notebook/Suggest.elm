@@ -4,15 +4,14 @@ module Notebook.Suggest exposing
     , suggestNext
     )
 
-{-| The bit that makes the notebook a teaching tool: ready-made **lessons** and
-**context-aware suggestions** for the next step.
+{-| The teaching layer: ready-made **lessons** and **context-aware suggestions**.
 
 [`lessons`](#lessons) are guided notebooks (markdown explanations interleaved with runnable
-code) the user can load with one click. [`suggestNext`](#suggestNext) looks at the value the
-last cell produced and proposes concrete, insert-ready next steps — average this column,
-group by that category, filter these rows — so exploring the data is a matter of picking the
-next move rather than knowing the whole API up front. Suggestions reference `_`, the kernel's
-binding for the most recent result.
+real Elm) the user loads with one click. [`suggestNext`](#suggestNext) inspects the value the
+last cell produced and proposes concrete, insert-ready next steps — average this column, group
+by that field, filter these rows — so exploring is a matter of picking the next move. All code is
+idiomatic Elm (`List.map`/`List.filter`/`List.sortBy`, `\r -> r.field` accessors, and the
+prelude's `mean`/`groupBy`); suggestions reference `_`, the kernel's binding for the last result.
 
 @docs Lesson, Suggestion
 @docs lessons, starter
@@ -20,8 +19,9 @@ binding for the most recent result.
 
 -}
 
+import Lang exposing (Value(..))
 import Notebook.Cell exposing (CellKind(..))
-import Notebook.Value as Value exposing (Value(..))
+import Notebook.Value as Value
 
 
 {-| A guided notebook: a title, a one-line blurb, and the cells to load. -}
@@ -43,20 +43,21 @@ type alias Suggestion =
 
 
 
--- LESSONS --------------------------------------------------------------------
+-- STARTER & LESSONS ----------------------------------------------------------
 
 
-{-| The notebook the site opens with: a tiny, self-explaining tour ending on a dataset, so
-the suggestion panel immediately has something to work with.
+{-| The notebook the site opens with: a short, self-explaining tour ending on a dataset, so the
+suggestion panel immediately has something to work with.
 -}
 starter : List ( CellKind, String )
 starter =
-    [ ( Markdown, "# Welcome to elm-notebook\n\nA Jupyter-style notebook for **data exploration in Elm**. Each cell below is either a note (like this one) or a line of code the kernel runs. Edit a cell and press **Run** — values defined in one cell are visible in the next, just like a real notebook kernel.\n\nStart anywhere, then follow the **suggested next steps** on the right." )
-    , ( Code, "-- a code cell is one expression; this one builds a list\nnumbers = range 1 10" )
-    , ( Code, "-- `numbers` is now in scope for every cell below\nsum numbers" )
-    , ( Markdown, "## A little dataset\n\nA *table* is just a list of records. The kernel renders it as a grid." )
-    , ( Code, "people =\n  [ { name = \"Ada\",   dept = \"Eng\",    salary = 95 }\n  , { name = \"Grace\", dept = \"Eng\",    salary = 110 }\n  , { name = \"Lin\",   dept = \"Design\", salary = 80 }\n  , { name = \"Ravi\",  dept = \"Design\", salary = 85 }\n  ]" )
-    , ( Code, "-- the result of `people` is now `_`; the panel on the right suggests where to go next\nmean (column \"salary\" people)" )
+    [ ( Markdown, "# Welcome to elm-notebook\n\nA Jupyter-style notebook for **data exploration in real Elm**. Each cell is either a note (like this) or a line of Elm the kernel runs. Edit a cell and press **Run** — names defined in one cell are visible in the next, just like a notebook kernel.\n\nStart anywhere, then follow the **suggested next steps** on the right." )
+    , ( Code, "-- a code cell is one Elm expression\nList.range 1 10" )
+    , ( Code, "-- `name = expr` publishes a value to every later cell\nnumbers = List.range 1 10" )
+    , ( Code, "List.sum numbers" )
+    , ( Markdown, "## A little dataset\n\nA *table* is just a `List` of records. The kernel renders it as a grid." )
+    , ( Code, "people =\n    [ { name = \"Ada\", dept = \"Eng\", salary = 95 }\n    , { name = \"Grace\", dept = \"Eng\", salary = 110 }\n    , { name = \"Lin\", dept = \"Design\", salary = 80 }\n    , { name = \"Ravi\", dept = \"Design\", salary = 85 }\n    ]" )
+    , ( Code, "-- the last result is `_`; the panel on the right suggests where to go next\nmean (List.map (\\r -> r.salary) people)" )
     ]
 
 
@@ -66,61 +67,70 @@ lessons =
     [ Lesson "values"
         "Values & variables"
         "Numbers, text, booleans, and naming results so later cells can use them."
-        [ ( Markdown, "# Values & variables\n\nEvery code cell evaluates **one expression**. A cell of the form `name = expr` *names* its result, publishing it to the kernel so every later cell can use it." )
+        [ ( Markdown, "# Values & variables\n\nEvery code cell evaluates **one expression**. A cell `name = expr` *names* its result, publishing it to the kernel so later cells can use it." )
         , ( Code, "1 + 2 * 3" )
         , ( Code, "radius = 5" )
-        , ( Code, "area = pi * radius ^ 2" )
-        , ( Code, "-- text joins with ++, and `_` is always the previous result\n\"area is about \" ++ toText (round area)" )
+        , ( Code, "area = 3.14159 * radius ^ 2" )
+        , ( Code, "\"area is about \" ++ String.fromInt (round area)" )
         , ( Code, "if area > 50 then \"big\" else \"small\"" )
         ]
     , Lesson "lists"
         "Lists & ranges"
         "Build lists, summarise them, slice them, sort them."
-        [ ( Markdown, "# Lists & ranges\n\n`range a b` builds an inclusive list. Lists are summarised with `sum`, `mean`, `maximum`, `length`, sliced with `take`/`drop`, and reordered with `sort`/`reverse`." )
-        , ( Code, "xs = range 1 20" )
-        , ( Code, "sum xs" )
+        [ ( Markdown, "# Lists & ranges\n\n`List.range a b` builds an inclusive list. Lists are summarised with `List.sum`/`mean`/`List.maximum`/`List.length`, sliced with `List.take`/`List.drop`, reordered with `List.sort`/`List.reverse`." )
+        , ( Code, "xs = List.range 1 20" )
+        , ( Code, "List.sum xs" )
         , ( Code, "mean xs" )
-        , ( Code, "take 5 (reverse xs)" )
-        , ( Code, "sort [5, 3, 8, 1, 9, 2]" )
+        , ( Code, "List.take 5 (List.reverse xs)" )
+        , ( Code, "List.sort [ 5, 3, 8, 1, 9, 2 ]" )
         ]
     , Lesson "transform"
         "map · filter · fold"
-        "The three verbs of data processing, with lambdas."
-        [ ( Markdown, "# map · filter · fold\n\nThese three higher-order functions are the heart of functional data processing.\n\n- `map f xs` transforms every element\n- `filter pred xs` keeps the elements passing a test\n- `foldl f init xs` collapses a list to a single value\n\nA lambda is written `\\x -> …`." )
-        , ( Code, "nums = range 1 10" )
-        , ( Code, "map (\\x -> x * x) nums" )
-        , ( Code, "filter (\\x -> mod x 2 == 0) nums" )
-        , ( Code, "foldl (\\x acc -> x + acc) 0 nums" )
-        , ( Code, "-- piped, left to right\nnums |> filter (\\x -> x > 5) |> map (\\x -> x * 10) |> sum" )
+        "The three verbs of data processing, with lambdas and pipes."
+        [ ( Markdown, "# map · filter · fold\n\nThe heart of functional data processing:\n\n- `List.map f xs` transforms every element\n- `List.filter pred xs` keeps the elements passing a test\n- `List.foldl f init xs` collapses a list to a single value\n\nA lambda is written `\\x -> …`; the pipe `|>` chains steps left to right." )
+        , ( Code, "nums = List.range 1 10" )
+        , ( Code, "List.map (\\x -> x * x) nums" )
+        , ( Code, "List.filter (\\x -> modBy 2 x == 0) nums" )
+        , ( Code, "List.foldl (\\x acc -> x + acc) 0 nums" )
+        , ( Code, "nums\n    |> List.filter (\\x -> x > 5)\n    |> List.map (\\x -> x * 10)\n    |> List.sum" )
         ]
     , Lesson "records"
         "Records & tables"
         "Group fields into records; a list of records is a table."
-        [ ( Markdown, "# Records & tables\n\nA **record** groups named fields: `{ name = \"Ada\", age = 36 }`, read back with `r.name`. A **list of records is a table** — the kernel draws it as a grid." )
+        [ ( Markdown, "# Records & tables\n\nA **record** groups named fields: `{ name = \"Ada\", age = 36 }`, read back with `r.name`. A **list of records is a table** — the kernel draws it as a grid, and `List.sortBy` / `List.map` work over the rows." )
         , ( Code, "ada = { name = \"Ada\", age = 36 }" )
         , ( Code, "ada.name" )
-        , ( Code, "table =\n  [ { city = \"Oslo\",   temp = -3 }\n  , { city = \"Cairo\",  temp = 22 }\n  , { city = \"Tokyo\",  temp = 9 }\n  ]" )
-        , ( Code, "column \"temp\" table" )
-        , ( Code, "sortByField \"temp\" table" )
+        , ( Code, "cities =\n    [ { city = \"Oslo\", temp = -3 }\n    , { city = \"Cairo\", temp = 22 }\n    , { city = \"Tokyo\", temp = 9 }\n    ]" )
+        , ( Code, "List.map (\\r -> r.temp) cities" )
+        , ( Code, "List.sortBy (\\r -> r.temp) cities" )
         ]
     , Lesson "analyse"
         "Analysing a dataset"
-        "Filter, project, group and aggregate a small table end to end."
-        [ ( Markdown, "# Analysing a dataset\n\nA full mini-analysis: start from a table, then **filter** rows, **select** columns, **group** by a category and **aggregate** each group." )
-        , ( Code, "sales =\n  [ { product = \"Pen\",    region = \"North\", units = 120 }\n  , { product = \"Pen\",    region = \"South\", units = 80 }\n  , { product = \"Mug\",    region = \"North\", units = 45 }\n  , { product = \"Mug\",    region = \"South\", units = 70 }\n  , { product = \"Notebook\", region = \"North\", units = 200 }\n  ]" )
-        , ( Code, "-- only the strong rows\nfilter (\\row -> row.units > 75) sales" )
-        , ( Code, "-- total units per region\ngroupBy \"region\" sales" )
-        , ( Code, "-- the average order size\nmean (column \"units\" sales)" )
+        "Filter, transform, group and aggregate a small table end to end."
+        [ ( Markdown, "# Analysing a dataset\n\nA full mini-analysis: from a table, **filter** rows, pull out a column with `List.map`, **group** by a field, and **aggregate** each group. `groupBy` returns one record per group carrying its `count` and its `items` (a nested table)." )
+        , ( Code, "sales =\n    [ { product = \"Pen\", region = \"North\", units = 120 }\n    , { product = \"Pen\", region = \"South\", units = 80 }\n    , { product = \"Mug\", region = \"North\", units = 45 }\n    , { product = \"Mug\", region = \"South\", units = 70 }\n    , { product = \"Notebook\", region = \"North\", units = 200 }\n    ]" )
+        , ( Code, "-- only the strong rows\nList.filter (\\r -> r.units > 75) sales" )
+        , ( Code, "-- bucket by region (each group keeps its rows)\ngroupBy (\\r -> r.region) sales" )
+        , ( Code, "-- the average order size\nmean (List.map (\\r -> r.units) sales)" )
+        ]
+    , Lesson "decisions"
+        "Decisions: if & case"
+        "Branch on conditions and pattern-match with case (and Maybe)."
+        [ ( Markdown, "# Decisions\n\nElm chooses with `if … then … else …` and, more powerfully, `case … of` pattern matching. `List.head` returns a `Maybe`, matched as `Just x` or `Nothing`." )
+        , ( Code, "grade n =\n    if n >= 90 then\n        \"A\"\n\n    else if n >= 80 then\n        \"B\"\n\n    else\n        \"C\"" )
+        , ( Code, "List.map grade [ 95, 82, 71 ]" )
+        , ( Code, "first = List.head (List.range 10 20)" )
+        , ( Code, "case first of\n    Just n ->\n        n * 100\n\n    Nothing ->\n        0" )
         ]
     , Lesson "text"
         "Text & strings"
         "Slice, case, split and join text."
-        [ ( Markdown, "# Text & strings\n\nText is processed with `toUpper`/`toLower`, `trim`, `split`, `join`, `words`, `contains` and `++` for concatenation." )
+        [ ( Markdown, "# Text & strings\n\nText is processed with `String.toUpper`/`toLower`, `trim`, `split`, `join`, `words`, `contains`, and `++` for concatenation." )
         , ( Code, "phrase = \"  the quick brown fox  \"" )
-        , ( Code, "trim phrase |> toUpper" )
-        , ( Code, "words (trim phrase)" )
-        , ( Code, "join \"-\" (words (trim phrase))" )
-        , ( Code, "contains \"quick\" phrase" )
+        , ( Code, "String.trim phrase |> String.toUpper" )
+        , ( Code, "String.words (String.trim phrase)" )
+        , ( Code, "String.join \"-\" (String.words (String.trim phrase))" )
+        , ( Code, "String.contains \"quick\" phrase" )
         ]
     ]
 
@@ -147,25 +157,16 @@ suggestNext maybeValue =
 noteSuggestion : Suggestion
 noteSuggestion =
     Suggestion "Add a note"
-        "Document what you just learned — good notebooks explain themselves."
+        "Document what you just found — good notebooks explain themselves."
         Markdown
         "## What I found\n\n…"
 
 
 starterSuggestions : List Suggestion
 starterSuggestions =
-    [ Suggestion "Make a list"
-        "A range of numbers to summarise and transform."
-        Code
-        "range 1 20"
-    , Suggestion "Make a table"
-        "A list of records is rendered as a grid."
-        Code
-        "rows =\n  [ { name = \"A\", value = 10 }\n  , { name = \"B\", value = 25 }\n  , { name = \"C\", value = 17 }\n  ]"
-    , Suggestion "Name a value"
-        "Bind a result so later cells can reuse it."
-        Code
-        "x = 42"
+    [ Suggestion "Make a list" "A range of numbers to summarise and transform." Code "List.range 1 20"
+    , Suggestion "Make a table" "A list of records is rendered as a grid." Code "rows =\n    [ { name = \"A\", value = 10 }\n    , { name = \"B\", value = 25 }\n    , { name = \"C\", value = 17 }\n    ]"
+    , Suggestion "Name a value" "Bind a result so later cells can reuse it." Code "x = 42"
     ]
 
 
@@ -177,7 +178,7 @@ forValue value =
     else
         case value of
             VList items ->
-                if List.all isNumber items && not (List.isEmpty items) then
+                if not (List.isEmpty items) && List.all isNumber items then
                     numberListSuggestions value
 
                 else
@@ -212,30 +213,27 @@ tableSuggestions value =
 
         threshold =
             Value.numberToString (toFloat (round (columnMean numCol value)))
-
-        firstTwo =
-            List.take 2 cols |> List.map (\c -> "\"" ++ c ++ "\"")
     in
-    [ Suggestion "Average a column"
+    [ Suggestion "Pull out a column"
+        ("Get the " ++ numCol ++ " of every row.")
+        Code
+        ("List.map (\\r -> r." ++ numCol ++ ") _")
+    , Suggestion "Average a column"
         ("Mean of the " ++ numCol ++ " column.")
         Code
-        ("mean (column \"" ++ numCol ++ "\" _)")
+        ("mean (List.map (\\r -> r." ++ numCol ++ ") _)")
     , Suggestion "Filter rows"
         ("Keep rows whose " ++ numCol ++ " is above " ++ threshold ++ ".")
         Code
-        ("filter (\\row -> row." ++ numCol ++ " > " ++ threshold ++ ") _")
-    , Suggestion "Group by category"
+        ("List.filter (\\r -> r." ++ numCol ++ " > " ++ threshold ++ ") _")
+    , Suggestion "Group by a field"
         ("Bucket the rows by " ++ textCol ++ " (each group carries its count and rows).")
         Code
-        ("groupBy \"" ++ textCol ++ "\" _")
+        ("groupBy (\\r -> r." ++ textCol ++ ") _")
     , Suggestion "Sort the table"
         ("Order the rows by " ++ numCol ++ ".")
         Code
-        ("sortByField \"" ++ numCol ++ "\" _")
-    , Suggestion "Pick columns"
-        "Project the table down to a couple of columns."
-        Code
-        ("select [" ++ String.join ", " firstTwo ++ "] _")
+        ("List.sortBy (\\r -> r." ++ numCol ++ ") _")
     ]
 
 
@@ -245,23 +243,23 @@ numberListSuggestions value =
         threshold =
             Value.numberToString (toFloat (round (listMean value)))
     in
-    [ Suggestion "Total" "Add the numbers up." Code "sum _"
+    [ Suggestion "Total" "Add the numbers up." Code "List.sum _"
     , Suggestion "Average" "The mean of the list." Code "mean _"
-    , Suggestion "Largest" "The maximum value." Code "maximum _"
-    , Suggestion "Sort" "Order the values ascending." Code "sort _"
+    , Suggestion "Largest" "The maximum value." Code "List.maximum _"
+    , Suggestion "Sort" "Order the values ascending." Code "List.sort _"
     , Suggestion "Keep the big ones"
         ("Filter to values above the mean (" ++ threshold ++ ").")
         Code
-        ("filter (\\x -> x > " ++ threshold ++ ") _")
-    , Suggestion "Transform each" "Double every element." Code "map (\\x -> x * 2) _"
+        ("List.filter (\\x -> x > " ++ threshold ++ ") _")
+    , Suggestion "Transform each" "Double every element." Code "List.map (\\x -> x * 2) _"
     ]
 
 
 listSuggestions : List Suggestion
 listSuggestions =
-    [ Suggestion "Count" "How many elements?" Code "length _"
-    , Suggestion "First few" "Take the first three." Code "take 3 _"
-    , Suggestion "Reverse" "Flip the order." Code "reverse _"
+    [ Suggestion "Count" "How many elements?" Code "List.length _"
+    , Suggestion "First few" "Take the first three." Code "List.take 3 _"
+    , Suggestion "Reverse" "Flip the order." Code "List.reverse _"
     , Suggestion "Unique" "Drop duplicates." Code "unique _"
     ]
 
@@ -270,16 +268,16 @@ numberSuggestions : List Suggestion
 numberSuggestions =
     [ Suggestion "Square root" "The square root of the number." Code "sqrt _"
     , Suggestion "Double it" "Multiply by two." Code "_ * 2"
-    , Suggestion "Count up to it" "Build a range ending here." Code "range 1 (round _)"
+    , Suggestion "Count up to it" "Build a range ending here." Code "List.range 1 (round _)"
     ]
 
 
 stringSuggestions : List Suggestion
 stringSuggestions =
-    [ Suggestion "Upper-case" "Shout it." Code "toUpper _"
-    , Suggestion "Split into words" "Break on spaces." Code "words _"
-    , Suggestion "Length" "How many characters?" Code "length _"
-    , Suggestion "Contains?" "Test for a substring." Code "contains \"a\" _"
+    [ Suggestion "Upper-case" "Shout it." Code "String.toUpper _"
+    , Suggestion "Split into words" "Break on spaces." Code "String.words _"
+    , Suggestion "Length" "How many characters?" Code "String.length _"
+    , Suggestion "Contains?" "Test for a substring." Code "String.contains \"a\" _"
     ]
 
 
@@ -289,19 +287,18 @@ recordSuggestions fields =
         firstKey =
             List.head fields |> Maybe.map Tuple.first |> Maybe.withDefault "name"
     in
-    [ Suggestion "List its fields" "The record's field names." Code "keys _"
-    , Suggestion "Read a field" ("Get the " ++ firstKey ++ " field.") Code ("get \"" ++ firstKey ++ "\" _")
-    , Suggestion "All the values" "The record's values as a list." Code "values _"
+    [ Suggestion "Read a field" ("Get the " ++ firstKey ++ " field.") Code ("_." ++ firstKey)
+    , Suggestion "Wrap in a list" "Start a one-row table from it." Code "[ _ ]"
     ]
 
 
 
--- value introspection helpers ------------------------------------------------
+-- value introspection --------------------------------------------------------
 
 
 isNumber : Value -> Bool
-isNumber v =
-    case v of
+isNumber value =
+    case value of
         VNum _ ->
             True
 
@@ -310,8 +307,8 @@ isNumber v =
 
 
 isText : Value -> Bool
-isText v =
-    case v of
+isText value =
+    case value of
         VStr _ ->
             True
 
@@ -346,8 +343,13 @@ firstColumnOfType pred value cols =
     List.filter ofType cols |> List.head
 
 
-columnValues : String -> Value -> List Float
-columnValues name value =
+columnMean : String -> Value -> Float
+columnMean name value =
+    average (columnNumbers name value)
+
+
+columnNumbers : String -> Value -> List Float
+columnNumbers name value =
     case value of
         VList rows ->
             List.filterMap (rowNumber name) rows
@@ -371,11 +373,6 @@ rowNumber name row =
             Nothing
 
 
-columnMean : String -> Value -> Float
-columnMean name value =
-    average (columnValues name value)
-
-
 listMean : Value -> Float
 listMean value =
     case value of
@@ -387,8 +384,8 @@ listMean value =
 
 
 numberOf : Value -> Maybe Float
-numberOf v =
-    case v of
+numberOf value =
+    case value of
         VNum n ->
             Just n
 

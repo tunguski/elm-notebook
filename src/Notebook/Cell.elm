@@ -6,9 +6,10 @@ module Notebook.Cell exposing
 
 {-| A single notebook cell — the unit a notebook is made of, exactly as in Jupyter.
 
-A cell is either **Markdown** (prose that documents the analysis) or **Code** (one
-expression the kernel evaluates). A code cell remembers its last [`Output`](#Output) and its
-execution count (`In [n]`), so the view can show `In [3]` / `Out [3]` the way a notebook does.
+A cell is either **Markdown** (prose) or **Code** (one expression the kernel evaluates). A code
+cell remembers its last [`Output`](#Output) and its execution count (`In [n]`), so the view can
+show `In [3]` / `Out [3]` the way a notebook does. Outputs hold the interpreter's
+[`Lang.Value`](Lang#Value).
 
 @docs Cell, CellKind, Output
 @docs markdown, code
@@ -16,7 +17,7 @@ execution count (`In [n]`), so the view can show `In [3]` / `Out [3]` the way a 
 
 -}
 
-import Notebook.Value exposing (Value)
+import Lang exposing (Value)
 
 
 {-| The two kinds of cell. -}
