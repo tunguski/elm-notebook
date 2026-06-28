@@ -1,4 +1,4 @@
-module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, valueHtml, markdownHtml)
+module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, valueHtml, markdownHtml, interpolate)
 
 {-| The HTML view of a notebook: syntax-highlighted, auto-growing editors, outputs rendered as
 scalars / records / tables (recursively, so nested tables nest) / headerless 2-D grids / errors,
@@ -21,7 +21,9 @@ import Html.Events as HE
 import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
 import Notebook.Chart as Chart exposing (ChartKind)
+import Notebook.Complete as Complete
 import Notebook.Doc exposing (Doc)
+import Notebook.Profile as Profile
 import Notebook.Suggest exposing (Suggestion)
 import Notebook.Value as Value
 
@@ -55,6 +57,12 @@ type alias Config msg =
     , onFilter : Int -> String -> msg
     , tableExpanded : Int -> Bool
     , onExpand : Int -> Bool -> msg
+    , evalInline : String -> Maybe String
+    , isProfile : Int -> Bool
+    , onProfile : Int -> Bool -> msg
+    , report : Bool
+    , activeCell : Maybe Int
+    , scopeNames : List String
     }
 
 
@@ -71,15 +79,56 @@ notebook config doc =
 
 cellView : Config msg -> Cell -> Html msg
 cellView config cell =
-    case cell.kind of
-        Code ->
-            codeCellView config cell
+    if config.report then
+        reportCellView config cell
 
+    else
+        case cell.kind of
+            Code ->
+                codeCellView config cell
+
+            Markdown ->
+                markdownCellView config cell
+
+            Input ->
+                inputCellView config cell
+
+
+{-| A cell in report mode: prose renders, a code cell shows only its output, an input keeps its
+widget — no editors, prompts or toolbars. -}
+reportCellView : Config msg -> Cell -> Html msg
+reportCellView config cell =
+    case cell.kind of
         Markdown ->
-            markdownCellView config cell
+            div [ HA.class "nb-cell nb-cell-md nb-cell-report" ]
+                [ markdownHtml (interpolate config.evalInline cell.source) ]
 
         Input ->
-            inputCellView config cell
+            case cell.input of
+                Just spec ->
+                    div [ HA.class "nb-cell nb-cell-input nb-cell-report" ]
+                        [ div [ HA.class "nb-input-row" ]
+                            [ span [ HA.class "nb-input-name" ] [ text spec.name ]
+                            , span [ HA.class "nb-input-eq" ] [ text "=" ]
+                            , controlWidget config cell spec
+                            , span [ HA.class "nb-input-val" ] [ text (litText spec) ]
+                            ]
+                        ]
+
+                Nothing ->
+                    text ""
+
+        Code ->
+            case cell.output of
+                OutNone ->
+                    text ""
+
+                OutError message ->
+                    div [ HA.class "nb-cell nb-cell-report" ] [ div [ HA.class "nb-error" ] [ text message ] ]
+
+                OutValue value ->
+                    div [ HA.class "nb-cell nb-cell-report" ]
+                        [ div [ HA.class "nb-value" ] [ renderOutput config cell value ] ]
 
 
 inputCellView : Config msg -> Cell -> Html msg
@@ -232,10 +281,40 @@ codeCellView config cell =
                 , onChange = config.onEdit cell.id
                 , onKey = Just (codeKeys config cell)
                 }
+            , completionBar config cell
             , cellToolbar config cell
             , outputArea config cell
             ]
         ]
+
+
+{-| The completion bar shown under the active code cell: the in-scope names that extend the token at
+the caret; clicking one inserts it. -}
+completionBar : Config msg -> Cell -> Html msg
+completionBar config cell =
+    if config.activeCell == Just cell.id then
+        case Complete.completions cell.source (config.caretOf cell.id) config.scopeNames of
+            [] ->
+                text ""
+
+            names ->
+                div [ HA.class "nb-complete" ]
+                    (List.map
+                        (\name -> button [ HA.class "nb-complete-item", HE.onClick (applyCompletion config cell name) ] [ text name ])
+                        names
+                    )
+
+    else
+        text ""
+
+
+applyCompletion : Config msg -> Cell -> String -> msg
+applyCompletion config cell name =
+    let
+        ( source, caret ) =
+            Complete.apply cell.source (config.caretOf cell.id) name
+    in
+    config.onEdit cell.id source caret
 
 
 markdownCellView : Config msg -> Cell -> Html msg
@@ -243,7 +322,7 @@ markdownCellView config cell =
     div [ HA.class "nb-cell nb-cell-md" ]
         [ div [ HA.class "nb-gutter" ] [ span [ HA.class "nb-prompt nb-prompt-md" ] [ text "md" ] ]
         , div [ HA.class "nb-body" ]
-            [ markdownHtml cell.source
+            [ markdownHtml (interpolate config.evalInline cell.source)
             , CodeEditor.view
                 { source = cell.source
                 , caret = config.caretOf cell.id
@@ -257,11 +336,20 @@ markdownCellView config cell =
         ]
 
 
-{-| Keyboard chords for a code cell: Shift/Ctrl/Cmd+Enter runs it; Alt+↑/↓ moves it. -}
+{-| Keyboard chords for a code cell: Shift/Ctrl/Cmd+Enter runs it; Tab accepts the top completion;
+Alt+↑/↓ moves it. -}
 codeKeys : Config msg -> Cell -> CodeEditor.Chord -> Maybe msg
 codeKeys config cell chord =
     if chord.key == "Enter" && (chord.shift || chord.ctrl || chord.meta) then
         Just (config.onRun cell.id)
+
+    else if chord.key == "Tab" && not chord.shift && not chord.ctrl && not chord.meta then
+        case Complete.completions cell.source (config.caretOf cell.id) config.scopeNames of
+            top :: _ ->
+                Just (applyCompletion config cell top)
+
+            [] ->
+                Nothing
 
     else
         moveKeys config cell chord
@@ -283,6 +371,34 @@ moveKeys config cell chord =
 plainSegments : String -> List ( String, String )
 plainSegments s =
     [ ( "", s ) ]
+
+
+{-| Substitute every `{{ elm expression }}` in a markdown source with `evalExpr`'s rendering of it,
+so prose can quote live notebook values. An expression that doesn't evaluate (`evalExpr` returns
+`Nothing`) is left as the literal `{{ … }}`. -}
+interpolate : (String -> Maybe String) -> String -> String
+interpolate evalExpr source =
+    case String.split "{{" source of
+        first :: rest ->
+            first ++ String.concat (List.map (interpolateChunk evalExpr) rest)
+
+        [] ->
+            source
+
+
+interpolateChunk : (String -> Maybe String) -> String -> String
+interpolateChunk evalExpr chunk =
+    case String.split "}}" chunk of
+        expr :: rest ->
+            if List.isEmpty rest then
+                "{{" ++ chunk
+
+            else
+                (evalExpr (String.trim expr) |> Maybe.withDefault ("{{" ++ expr ++ "}}"))
+                    ++ String.join "}}" rest
+
+        [] ->
+            chunk
 
 
 cellToolbar : Config msg -> Cell -> Html msg
@@ -379,20 +495,55 @@ outputArea config cell =
 
 renderOutput : Config msg -> Cell -> Value -> Html msg
 renderOutput config cell value =
-    case config.chartOf cell.id of
-        Just kind ->
-            if Chart.chartable value then
-                div [ HA.class "nb-chart-box" ] [ Chart.view kind (config.colOf cell.id) value ]
+    if config.isProfile cell.id && Value.isTable value then
+        profilePanel value
 
-            else
-                valueHtml value
+    else
+        case config.chartOf cell.id of
+            Just kind ->
+                if Chart.chartable value then
+                    div [ HA.class "nb-chart-box" ] [ Chart.view kind (config.colOf cell.id) value ]
 
-        Nothing ->
-            if Value.isTable value then
-                interactiveTable config cell value
+                else
+                    valueHtml value
 
-            else
-                valueHtml value
+            Nothing ->
+                if Value.isTable value then
+                    interactiveTable config cell value
+
+                else
+                    valueHtml value
+
+
+{-| A per-column overview of a table: type, count, distinct, and numeric min / max / mean. -}
+profilePanel : Value -> Html msg
+profilePanel value =
+    let
+        num maybe =
+            maybe |> Maybe.map Value.numberToString |> Maybe.withDefault "—"
+
+        row col =
+            tr []
+                [ td [ HA.class "nb-prof-name" ] [ text col.name ]
+                , td [] [ span [ HA.class "nb-prof-kind" ] [ text col.kind ] ]
+                , td [ HA.class "nb-prof-n" ] [ text (String.fromInt col.count) ]
+                , td [ HA.class "nb-prof-n" ] [ text (String.fromInt col.distinct) ]
+                , td [ HA.class "nb-prof-n" ] [ text (num col.min) ]
+                , td [ HA.class "nb-prof-n" ] [ text (num col.max) ]
+                , td [ HA.class "nb-prof-n" ] [ text (num col.mean) ]
+                ]
+    in
+    div [ HA.class "nb-table-wrap" ]
+        [ table [ HA.class "nb-table nb-profile" ]
+            [ thead []
+                [ tr []
+                    (List.map (\h -> th [] [ text h ])
+                        [ "column", "type", "count", "distinct", "min", "max", "mean" ]
+                    )
+                ]
+            , tbody [] (List.map row (Profile.columns value))
+            ]
+        ]
 
 
 {-| The top-level table output, with sortable column headers, a row filter and a row cap — the
@@ -546,10 +697,17 @@ countLabel shown total =
 
 chartToggle : Config msg -> Cell -> Value -> Html msg
 chartToggle config cell value =
-    if Chart.chartable value then
+    if Chart.chartable value || Value.isTable value then
         let
+            profileOn =
+                config.isProfile cell.id
+
             current =
-                config.chartOf cell.id
+                if profileOn then
+                    Nothing
+
+                else
+                    config.chartOf cell.id
 
             chip lbl active msg =
                 button
@@ -565,12 +723,23 @@ chartToggle config cell value =
                     , HE.onClick msg
                     ]
                     [ text lbl ]
-        in
-        div [ HA.class "nb-chart-toggle" ]
-            (chip "Table" (current == Nothing) (config.onChart cell.id Nothing)
-                :: List.map
+
+            kindChips =
+                List.map
                     (\k -> chip (Chart.label k) (current == Just k) (config.onChart cell.id (Just k)))
                     (Chart.chartableKinds value)
+
+            profileChip =
+                if Value.isTable value then
+                    [ chip "Profile" profileOn (config.onProfile cell.id (not profileOn)) ]
+
+                else
+                    []
+        in
+        div [ HA.class "nb-chart-toggle" ]
+            (chip "Table" (current == Nothing && not profileOn) (config.onChart cell.id Nothing)
+                :: kindChips
+                ++ profileChip
                 ++ [ columnPicker config cell value current ]
             )
 

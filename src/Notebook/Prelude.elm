@@ -298,4 +298,28 @@ summarize keyFn valFn items =
     List.map
         (\\g -> { key = g.key, count = g.count, sum = g.sum, mean = g.sum / toFloat g.count })
         grouped
+
+
+linspaceFrom lo step i n =
+    if i >= n then
+        []
+
+    else
+        (lo + step * toFloat i) :: linspaceFrom lo step (i + 1) n
+
+
+linspace lo hi n =
+    if n <= 1 then
+        [ lo ]
+
+    else
+        linspaceFrom lo ((hi - lo) / toFloat (n - 1)) 0 n
+
+
+plot f lo hi =
+    List.map f (linspace lo hi 50)
+
+
+plotPoints f lo hi =
+    List.map (\\x -> { x = x, y = f x }) (linspace lo hi 50)
 """

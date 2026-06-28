@@ -28,9 +28,11 @@ import Notebook.Doc as Doc exposing (Doc)
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
 import Notebook.Export as Export
 import Notebook.Hint as Hint
+import Notebook.Import as Import
 import Notebook.Kernel as Kernel
 import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest exposing (Lesson, Suggestion)
+import Notebook.Value as Value
 import Notebook.View as NbView
 import Set exposing (Set)
 import Workspace
@@ -46,6 +48,12 @@ type alias NbDoc =
     , charts : Dict Int Chart.ChartKind
     , cols : Dict Int String
     , tables : Dict Int TableState
+    , profiles : Set Int
+    , paste : Maybe ( String, String )
+    , report : Bool
+    , past : List Doc
+    , future : List Doc
+    , active : Maybe Int
     , lesson : String
     , stale : Set Int
     }
@@ -89,6 +97,15 @@ type NbMsg
     | SortBy Int String
     | FilterRows Int String
     | ExpandTable Int Bool
+    | SetProfile Int Bool
+    | OpenImport
+    | SetImportName String
+    | SetImportText String
+    | DoImport
+    | CancelImport
+    | ToggleReport
+    | Undo
+    | Redo
     | InsertName String
     | SetInputValue Int String
     | SetInputName Int String
@@ -117,7 +134,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, paste = Nothing, report = False, past = [], future = [], active = Nothing, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -131,6 +148,12 @@ empty =
     , charts = Dict.empty
     , cols = Dict.empty
     , tables = Dict.empty
+    , profiles = Set.empty
+    , paste = Nothing
+    , report = False
+    , past = []
+    , future = []
+    , active = Nothing
     , lesson = ""
     , stale = Set.empty
     }
@@ -145,6 +168,12 @@ examples =
     , charts = Dict.empty
     , cols = Dict.empty
     , tables = Dict.empty
+    , profiles = Set.empty
+    , paste = Nothing
+    , report = False
+    , past = []
+    , future = []
+    , active = Nothing
     , lesson = "starter"
     , stale = Set.empty
     }
@@ -197,9 +226,87 @@ importTable table nb =
 -- UPDATE ---------------------------------------------------------------------
 
 
+{-| Structural / content changes worth an undo step (a snapshot of the document is pushed before
+they run). Per-keystroke edits, runs, input-widget tweaks and pure view toggles aren't snapshotted —
+they're cheap to redo, and a text edit has the textarea's own undo. -}
+undoable : NbMsg -> Bool
+undoable msg =
+    case msg of
+        DeleteCell _ ->
+            True
+
+        MoveUp _ ->
+            True
+
+        MoveDown _ ->
+            True
+
+        Convert _ _ ->
+            True
+
+        Insert _ ->
+            True
+
+        AddCode ->
+            True
+
+        AddMarkdown ->
+            True
+
+        AddInput ->
+            True
+
+        Clear ->
+            True
+
+        LoadLesson _ ->
+            True
+
+        Fix _ _ ->
+            True
+
+        DoImport ->
+            True
+
+        _ ->
+            False
+
+
+pushUndo : NbDoc -> NbDoc
+pushUndo nb =
+    { nb | past = nb.doc :: List.take 49 nb.past, future = [] }
+
+
 updateNb : NbMsg -> NbDoc -> NbDoc
 updateNb msg nb =
+    step msg
+        (if undoable msg then
+            pushUndo nb
+
+         else
+            nb
+        )
+
+
+step : NbMsg -> NbDoc -> NbDoc
+step msg nb =
     case msg of
+        Undo ->
+            case nb.past of
+                prev :: rest ->
+                    { nb | doc = prev, past = rest, future = nb.doc :: nb.future, stale = Set.empty }
+
+                [] ->
+                    nb
+
+        Redo ->
+            case nb.future of
+                next :: rest ->
+                    { nb | doc = next, future = rest, past = nb.doc :: nb.past, stale = Set.empty }
+
+                [] ->
+                    nb
+
         Edit id source caret ->
             let
                 doc2 =
@@ -209,6 +316,7 @@ updateNb msg nb =
             { nb
                 | doc = doc2
                 , carets = Dict.insert id caret nb.carets
+                , active = Just id
                 , stale = Set.union nb.stale (Deps.affected id doc2)
             }
 
@@ -280,10 +388,55 @@ updateNb msg nb =
 
                         Nothing ->
                             Dict.remove id nb.charts
+
+                -- choosing Table or a chart turns off the profile view
+                , profiles = Set.remove id nb.profiles
             }
 
         SetCol id colName ->
             { nb | cols = Dict.insert id colName nb.cols }
+
+        SetProfile id flag ->
+            { nb
+                | profiles =
+                    if flag then
+                        Set.insert id nb.profiles
+
+                    else
+                        Set.remove id nb.profiles
+            }
+
+        OpenImport ->
+            { nb | paste = Just ( "data", "" ) }
+
+        SetImportName name ->
+            { nb | paste = Maybe.map (\( _, txt ) -> ( name, txt )) nb.paste }
+
+        SetImportText txt ->
+            { nb | paste = Maybe.map (\( name, _ ) -> ( name, txt )) nb.paste }
+
+        CancelImport ->
+            { nb | paste = Nothing }
+
+        ToggleReport ->
+            { nb | report = not nb.report }
+
+        DoImport ->
+            case nb.paste of
+                Just ( name, txt ) ->
+                    let
+                        source =
+                            case Import.toElm name txt of
+                                Ok src ->
+                                    src
+
+                                Err message ->
+                                    "-- import failed: " ++ message
+                    in
+                    { nb | doc = nb.doc |> Doc.append Code source |> Doc.runAll, paste = Nothing }
+
+                Nothing ->
+                    nb
 
         SortBy id colName ->
             let
@@ -364,19 +517,42 @@ parseControl name =
 
 viewNb : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
 viewNb showCopy env nb =
-    div [ HA.class "nb-workspace" ]
-        [ lessonBar nb.lesson
-        , toolbar showCopy (Set.size nb.stale) nb.doc
+    div
+        [ HA.class
+            ("nb-workspace"
+                ++ (if nb.report then
+                        " nb-report-mode"
+
+                    else
+                        ""
+                   )
+            )
+        ]
+        [ if nb.report then
+            text ""
+
+          else
+            lessonBar nb.lesson
+        , toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
+        , pastePanel nb.paste
         , section [ HA.class "nb-main" ]
             [ div [ HA.class "nb-notebook" ]
                 [ NbView.notebook (viewConfig env nb) nb.doc
-                , toolbar showCopy (Set.size nb.stale) nb.doc
+                , if nb.report then
+                    text ""
+
+                  else
+                    toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
                 ]
-            , div [ HA.class "nb-sidebar" ]
-                [ NbView.errorsPanel Run (errorList nb.doc)
-                , NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
-                , NbView.variablesPanel InsertName (Doc.variables nb.doc)
-                ]
+            , if nb.report then
+                text ""
+
+              else
+                div [ HA.class "nb-sidebar" ]
+                    [ NbView.errorsPanel Run (errorList nb.doc)
+                    , NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
+                    , NbView.variablesPanel InsertName (Doc.variables nb.doc)
+                    ]
             ]
         ]
 
@@ -410,7 +586,31 @@ viewConfig env nb =
     , onFilter = FilterRows
     , tableExpanded = \id -> (tableOf id nb).expanded
     , onExpand = ExpandTable
+    , evalInline = evalInline nb
+    , isProfile = \id -> Set.member id nb.profiles
+    , onProfile = SetProfile
+    , report = nb.report
+    , activeCell = nb.active
+    , scopeNames = Kernel.names nb.doc.kernel
     }
+
+
+{-| Evaluate a `{{ expr }}` from a markdown cell against the current kernel, for inline display. -}
+evalInline : NbDoc -> String -> Maybe String
+evalInline nb expr =
+    if String.trim expr == "" then
+        Nothing
+
+    else
+        case Tuple.first (Kernel.run expr nb.doc.kernel) of
+            OutValue value ->
+                Just (Value.displayValue value)
+
+            OutError message ->
+                Just ("⚠ " ++ message)
+
+            OutNone ->
+                Nothing
 
 
 {-| For a cell that failed on an unbound name, a "Did you mean …?" fix: the nearest in-scope name
@@ -471,11 +671,51 @@ exportCell cell =
             text ""
 
 
-toolbar : Bool -> Int -> Doc -> Html NbMsg
-toolbar showCopy staleCount doc =
-    section [ HA.class "nb-actions" ]
-        [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
-        , if staleCount > 0 then
+reportToggle : Bool -> Html NbMsg
+reportToggle report =
+    button [ HA.class "nb-action nb-action-report", HE.onClick ToggleReport ]
+        [ Html.i [ HA.class ("bi " ++ iconFor report) ] []
+        , text
+            (if report then
+                " Edit"
+
+             else
+                " Report"
+            )
+        ]
+
+
+iconFor : Bool -> String
+iconFor report =
+    if report then
+        "bi-pencil"
+
+    else
+        "bi-easel"
+
+
+undoButtons : Bool -> Bool -> List (Html NbMsg)
+undoButtons canUndo canRedo =
+    [ button [ HA.class "nb-action nb-action-icon", HA.disabled (not canUndo), HA.title "Undo", HE.onClick Undo ]
+        [ Html.i [ HA.class "bi bi-arrow-counterclockwise" ] [] ]
+    , button [ HA.class "nb-action nb-action-icon", HA.disabled (not canRedo), HA.title "Redo", HE.onClick Redo ]
+        [ Html.i [ HA.class "bi bi-arrow-clockwise" ] [] ]
+    ]
+
+
+toolbar : Bool -> Int -> Bool -> Bool -> Bool -> Doc -> Html NbMsg
+toolbar showCopy staleCount report canUndo canRedo doc =
+    if report then
+        section [ HA.class "nb-actions" ]
+            [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
+            , reportToggle report
+            ]
+
+    else
+        section [ HA.class "nb-actions" ]
+        ([ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ] ]
+            ++ undoButtons canUndo canRedo
+            ++ [ if staleCount > 0 then
             button [ HA.class "nb-action nb-action-stale", HE.onClick RunStale, HA.title "Re-run the cells affected by your edits" ]
                 [ Html.i [ HA.class "bi bi-arrow-repeat" ] [], text (" Run stale (" ++ String.fromInt staleCount ++ ")") ]
 
@@ -484,15 +724,61 @@ toolbar showCopy staleCount doc =
         , button [ HA.class "nb-action", HE.onClick AddCode ] [ text "+ Code cell" ]
         , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text "+ Text cell" ]
         , button [ HA.class "nb-action", HE.onClick AddInput ] [ text "+ Input" ]
+        , button [ HA.class "nb-action", HE.onClick OpenImport ] [ Html.i [ HA.class "bi bi-clipboard-data" ] [], text " Import data" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
         , span [ HA.class "nb-action-export" ] [ Export.notebookLinks doc ]
+        , reportToggle report
         , if showCopy then
             button [ HA.class "nb-action nb-action-copy", HE.onClick CopyToWorkspaceRequested ]
                 [ Html.i [ HA.class "bi bi-folder-plus" ] [], text " Copy to workspace" ]
 
           else
             text ""
-        ]
+         ]
+        )
+
+
+{-| The "Paste data" panel: a name + a textarea that auto-detects JSON vs CSV/TSV on import. -}
+pastePanel : Maybe ( String, String ) -> Html NbMsg
+pastePanel paste =
+    case paste of
+        Nothing ->
+            text ""
+
+        Just ( name, txt ) ->
+            section [ HA.class "nb-import" ]
+                [ div [ HA.class "nb-import-head" ]
+                    [ span [ HA.class "nb-import-title" ] [ text "Paste data — a JSON array of objects, or CSV / TSV" ]
+                    , Html.input
+                        [ HA.class "nb-import-name", HA.value name, HA.placeholder "name", HA.attribute "spellcheck" "false", HE.onInput SetImportName ]
+                        []
+                    ]
+                , Html.textarea
+                    [ HA.class "nb-import-text"
+                    , HA.attribute "rows" "6"
+                    , HA.attribute "spellcheck" "false"
+                    , HA.value txt
+                    , HA.placeholder "[ { \"name\": \"Ada\", \"age\": 36 }, … ]   or   name,age\\nAda,36"
+                    , HE.onInput SetImportText
+                    ]
+                    []
+                , div [ HA.class "nb-import-actions" ]
+                    [ button [ HA.class "nb-action nb-action-primary", HE.onClick DoImport ] [ text "Import → cell" ]
+                    , button [ HA.class "nb-action", HE.onClick CancelImport ] [ text "Cancel" ]
+                    , span [ HA.class "nb-import-hint" ]
+                        [ text
+                            (if String.trim txt == "" then
+                                ""
+
+                             else if Import.looksLikeJson txt then
+                                "detected: JSON"
+
+                             else
+                                "detected: CSV / TSV"
+                            )
+                        ]
+                    ]
+                ]
 
 
 lessonBar : String -> Html NbMsg

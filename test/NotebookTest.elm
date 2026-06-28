@@ -14,16 +14,20 @@ every shipped lesson is executed through a real kernel and asserted to run clean
 import Expect exposing (Expectation)
 import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
+import Notebook.Complete as Complete
 import Notebook.Csv as Csv
 import Notebook.Deps as Deps
 import Notebook.Doc as Doc
 import Notebook.Hint as Hint
+import Notebook.Import as Import
 import Set
 import Notebook.Export as Export
 import Notebook.Kernel as Kernel
+import Notebook.Profile as Profile
 import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest
 import Notebook.Value as Value
+import Notebook.View as NbView
 import Test exposing (Test, describe, test)
 
 
@@ -39,6 +43,9 @@ suite =
         , analysisTests
         , depsTests
         , hintTests
+        , interpolateTests
+        , profileTests
+        , completeTests
         , controlFlowTests
         , scopeTests
         , parsingTests
@@ -49,6 +56,7 @@ suite =
         , docTests
         , suggestTests
         , csvTests
+        , importTests
         , serializeTests
         , exportTests
         , lessonTests
@@ -178,6 +186,43 @@ csvTests =
                         Expect.pass
         ]
 
+
+
+importTests : Test
+importTests =
+    describe "data import (auto-detect JSON / CSV)"
+        [ test "imports a JSON array of objects as a typed table" <|
+            \_ ->
+                case Import.toElm "people" "[{\"name\":\"Ada\",\"age\":36},{\"name\":\"Bob\",\"age\":41}]" of
+                    Ok source ->
+                        evalOk source
+                            (vlist
+                                [ VRecord [ ( "name", s "Ada" ), ( "age", n 36 ) ]
+                                , VRecord [ ( "name", s "Bob" ), ( "age", n 41 ) ]
+                                ]
+                            )
+
+                    Err message ->
+                        Expect.fail message
+        , test "falls back to CSV when the text isn't JSON" <|
+            \_ ->
+                case Import.toElm "t" "a,b\n1,2" of
+                    Ok source ->
+                        evalOk source (vlist [ VRecord [ ( "a", n 1 ), ( "b", n 2 ) ] ])
+
+                    Err message ->
+                        Expect.fail message
+        , test "looksLikeJson detects an array vs CSV" <|
+            \_ -> Expect.equal ( True, False ) ( Import.looksLikeJson "  [ 1 ]", Import.looksLikeJson "a,b\n1,2" )
+        , test "sanitises JSON keys into valid field names" <|
+            \_ ->
+                case Import.toElm "t" "[{\"First Name\":\"Ada\"}]" of
+                    Ok source ->
+                        evalOk source (vlist [ VRecord [ ( "first_name", s "Ada" ) ] ])
+
+                    Err message ->
+                        Expect.fail message
+        ]
 
 
 -- HELPERS --------------------------------------------------------------------
@@ -428,6 +473,9 @@ analysisTests =
         , check "countBy Eng count"
             ("(nth 0 (countBy (\\r -> r.dept) " ++ peopleSrc ++ ")).count")
             (n 2)
+        , check "linspace endpoints and spacing" "linspace 0 10 5" (vlist [ n 0, n 2.5, n 5, n 7.5, n 10 ])
+        , check "plot samples 50 points" "List.length (plot (\\x -> x) 0 1)" (n 50)
+        , check "plotPoints carries x and y" "(nth 0 (plotPoints (\\x -> x + 100) 0 10)).y" (n 100)
         ]
 
 
@@ -507,6 +555,91 @@ hintTests =
             \_ -> Expect.equal (Just "mean") (Hint.closest "maen" [ "mean", "median", "groupBy" ])
         , test "closest stays silent when nothing is near" <|
             \_ -> Expect.equal Nothing (Hint.closest "xyzzy" [ "mean", "total" ])
+        ]
+
+
+-- CODE COMPLETION ------------------------------------------------------------
+
+
+completeTests : Test
+completeTests =
+    describe "code completion"
+        [ test "currentToken: the identifier left of the caret" <|
+            \_ -> Expect.equal "me" (Complete.currentToken "x = me" 6)
+        , test "currentToken: a dot ends the token" <|
+            \_ -> Expect.equal "ma" (Complete.currentToken "List.ma" 7)
+        , test "completions: prefix match, sorted, excluding the exact token" <|
+            \_ ->
+                Expect.equal [ "mean", "median" ]
+                    (Complete.completions "me" 2 [ "median", "mean", "total", "me" ])
+        , test "completions: nothing when there is no token" <|
+            \_ -> Expect.equal [] (Complete.completions "x = " 4 [ "mean" ])
+        , test "apply: splices the chosen name and returns the new caret" <|
+            \_ -> Expect.equal ( "x = mean", 8 ) (Complete.apply "x = me" 6 "mean")
+        ]
+
+
+-- DATA PROFILING -------------------------------------------------------------
+
+
+profileTests : Test
+profileTests =
+    let
+        table =
+            VList
+                [ VRecord [ ( "dept", s "Eng" ), ( "salary", n 100 ) ]
+                , VRecord [ ( "dept", s "Eng" ), ( "salary", n 120 ) ]
+                , VRecord [ ( "dept", s "Design" ), ( "salary", n 80 ) ]
+                ]
+
+        cols =
+            Profile.columns table
+
+        colNamed name =
+            List.filter (\c -> c.name == name) cols |> List.head
+    in
+    describe "data profiling"
+        [ test "profiles every column" <|
+            \_ -> Expect.equal [ "dept", "salary" ] (List.map .name cols)
+        , test "a text column: kind, count, distinct, no numeric stats" <|
+            \_ ->
+                case colNamed "dept" of
+                    Just c ->
+                        Expect.equal ( "text", 3, 2, Nothing ) ( c.kind, c.count, c.distinct, c.mean )
+
+                    Nothing ->
+                        Expect.fail "no dept column"
+        , test "a numeric column: min / max / mean" <|
+            \_ ->
+                case colNamed "salary" of
+                    Just c ->
+                        -- mean is computed, so compare it through a string to dodge the Float-literal gotcha
+                        Expect.equal ( "number", Just 80, Just 120, Just "100" )
+                            ( c.kind, c.min, c.max, Maybe.map String.fromFloat c.mean )
+
+                    Nothing ->
+                        Expect.fail "no salary column"
+        , test "a non-table value profiles to nothing" <|
+            \_ -> Expect.equal [] (Profile.columns (VNum 5))
+        ]
+
+
+-- MARKDOWN INTERPOLATION -----------------------------------------------------
+
+
+interpolateTests : Test
+interpolateTests =
+    describe "markdown {{ expr }} interpolation"
+        [ test "substitutes an evaluated expression" <|
+            \_ -> Expect.equal "a x! b" (NbView.interpolate (\e -> Just (e ++ "!")) "a {{ x }} b")
+        , test "trims the expression before evaluating" <|
+            \_ -> Expect.equal "=mean=" (NbView.interpolate (\e -> Just ("=" ++ e ++ "=")) "{{   mean   }}")
+        , test "leaves an unevaluable span as a literal" <|
+            \_ -> Expect.equal "{{x}} y" (NbView.interpolate (\_ -> Nothing) "{{x}} y")
+        , test "passes prose without braces through unchanged" <|
+            \_ -> Expect.equal "no braces here" (NbView.interpolate (\_ -> Just "!") "no braces here")
+        , test "handles several spans" <|
+            \_ -> Expect.equal "1 and 2" (NbView.interpolate (\e -> Just e) "{{1}} and {{2}}")
         ]
 
 
