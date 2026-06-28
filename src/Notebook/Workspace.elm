@@ -1,4 +1,4 @@
-module Notebook.Workspace exposing (NbDoc, NbMsg, config)
+module Notebook.Workspace exposing (NbDoc, NbMsg, config, examples, examplesView, updateNb)
 
 {-| The notebook seen as a **workspace document**: this module adapts the notebook engine
 ([`Notebook.Doc`](Notebook-Doc) / [`Cell`](Notebook-Cell) / [`Kernel`](Notebook-Kernel) /
@@ -100,6 +100,23 @@ empty =
     , charts = Dict.empty
     , lesson = ""
     }
+
+
+{-| The starter notebook used by the standalone playground (the site's "examples" landing) — the
+guided starter run and ready to explore, without any workspace chrome. -}
+examples : NbDoc
+examples =
+    { doc = Doc.fromSpec Suggest.starter |> Doc.runAll
+    , carets = Dict.empty
+    , charts = Dict.empty
+    , lesson = "starter"
+    }
+
+
+{-| Render a notebook as a standalone playground (no comments, no workspace chrome). -}
+examplesView : NbDoc -> Html NbMsg
+examplesView nb =
+    viewNb { comments = Dict.empty, commentsVisible = False, commentCount = always 0 } nb
 
 
 elementsOf : NbDoc -> List ( String, String )

@@ -30,6 +30,7 @@ import Html.Attributes as HA
 import Html.Events as HE
 import Json.Decode as D
 import Json.Encode as E
+import Random
 import Url
 import Workspace.Backend exposing (Backend, Context)
 import Workspace.Comment as Comment
@@ -169,8 +170,10 @@ type Msg docMsg
     = NoOp
     | GotMetas (Result String (List Meta))
     | GotDoc (Result String String)
-    | GotForDuplicate (Result String String)
+    | GotForDuplicate Id (Result String String)
     | New
+    | CreateFresh Id
+    | StartDuplicate Id Id
     | Open Id
     | Close
     | Delete Id
@@ -230,15 +233,12 @@ update config backend ctx msg model =
         GotDoc (Err e) ->
             ( { model | notice = Just e }, Cmd.none )
 
-        GotForDuplicate (Ok json) ->
+        GotForDuplicate newId (Ok json) ->
             case decodeStored config json of
                 Ok stored ->
                     let
-                        id =
-                            backend.newId model.metas
-
                         meta =
-                            { id = id
+                            { id = newId
                             , name = "Copy of " ++ displayName stored.meta.name
                             , kind = stored.meta.kind
                             , access = Types.defaultAccess ctx.user
@@ -257,14 +257,14 @@ update config backend ctx msg model =
                 Err e ->
                     ( { model | notice = Just ("Could not copy: " ++ e) }, Cmd.none )
 
-        GotForDuplicate (Err e) ->
+        GotForDuplicate _ (Err e) ->
             ( { model | notice = Just ("Could not copy: " ++ e) }, Cmd.none )
 
         New ->
-            let
-                id =
-                    backend.newId model.metas
+            ( model, Random.generate CreateFresh uuidGenerator )
 
+        CreateFresh id ->
+            let
                 meta =
                     Types.newMeta id "" config.kind ctx.user
 
@@ -277,6 +277,9 @@ update config backend ctx msg model =
             ( { model | metas = metas, open = Just stored, page = Editing, dialog = NoDialog, notice = Nothing }
             , Cmd.batch [ saveDoc config backend stored, backend.saveIndex metas ]
             )
+
+        StartDuplicate sourceId newId ->
+            ( model, backend.load sourceId (GotForDuplicate newId) )
 
         Open id ->
             ( model, backend.load id GotDoc )
@@ -316,7 +319,7 @@ update config backend ctx msg model =
             )
 
         Duplicate id ->
-            ( model, backend.load id GotForDuplicate )
+            ( model, Random.generate (StartDuplicate id) uuidGenerator )
 
         SetSearch q ->
             ( { model | search = q }, Cmd.none )
@@ -620,6 +623,46 @@ sanitize name =
         |> String.fromList
 
 
+{-| A random v4-style UUID, e.g. `3f2504e0-4f89-41d3-9a0c-0305e82c3301`. Each document is created
+with one, so it has a stable, unique, URL-safe id (used as `#doc/<id>` in the browser hosts). -}
+uuidGenerator : Random.Generator String
+uuidGenerator =
+    Random.list 32 (Random.int 0 15)
+        |> Random.map (List.indexedMap versioned >> List.map hexChar >> String.fromList >> dashed)
+
+
+{-| Force the version nibble (index 12 → 4) and the variant nibble (index 16 → 8..b). -}
+versioned : Int -> Int -> Int
+versioned i n =
+    if i == 12 then
+        4
+
+    else if i == 16 then
+        8 + modBy 4 n
+
+    else
+        n
+
+
+hexChar : Int -> Char
+hexChar n =
+    String.toList "0123456789abcdef"
+        |> List.drop (modBy 16 n)
+        |> List.head
+        |> Maybe.withDefault '0'
+
+
+dashed : String -> String
+dashed s =
+    String.join "-"
+        [ String.slice 0 8 s
+        , String.slice 8 12 s
+        , String.slice 12 16 s
+        , String.slice 16 20 s
+        , String.slice 20 32 s
+        ]
+
+
 
 -- SUBSCRIPTIONS --------------------------------------------------------------
 
@@ -740,15 +783,21 @@ metaRow ctx meta =
             , visibilityBadge meta.access.visibility
             ]
         , div [ HA.class "ws-row-actions" ]
-            [ button [ HA.class "ws-btn", HE.onClick (Open meta.id) ] [ text "Open" ]
-            , button [ HA.class "ws-btn", HE.onClick (Duplicate meta.id) ] [ text "Copy" ]
+            [ iconButton "ws-icon" "Open" "📂" (Open meta.id)
+            , iconButton "ws-icon" "Make a copy" "⧉" (Duplicate meta.id)
             , if Permissions.canWrite ctx meta.access then
-                button [ HA.class "ws-btn ws-btn-danger", HE.onClick (Delete meta.id) ] [ text "Delete" ]
+                iconButton "ws-icon ws-icon-danger" "Delete" "🗑" (Delete meta.id)
 
               else
                 text ""
             ]
         ]
+
+
+iconButton : String -> String -> String -> Msg docMsg -> Html (Msg docMsg)
+iconButton cls titleText glyph msg =
+    button [ HA.class ("ws-btn " ++ cls), HA.title titleText, HE.onClick msg ]
+        [ span [ HA.attribute "aria-hidden" "true" ] [ text glyph ] ]
 
 
 visibilityBadge : Visibility -> Html (Msg docMsg)
@@ -992,8 +1041,10 @@ dialogView config c ctx model =
 
 modal : String -> Html (Msg docMsg) -> Html (Msg docMsg)
 modal title body =
-    div [ HA.class "ws-overlay", HE.onClick CloseDialog ]
-        [ div [ HA.class "ws-modal", stopClick ]
+    -- NB: the backdrop deliberately has no click-to-close handler — relying on click bubbling here
+    -- closed the dialog whenever a form control inside it was clicked. Close via × or the buttons.
+    div [ HA.class "ws-overlay" ]
+        [ div [ HA.class "ws-modal" ]
             [ div [ HA.class "ws-modal-head" ]
                 [ h2 [ HA.class "ws-modal-title" ] [ text title ]
                 , button [ HA.class "ws-modal-x", HE.onClick CloseDialog ] [ text "×" ]
@@ -1001,11 +1052,6 @@ modal title body =
             , div [ HA.class "ws-modal-body" ] [ body ]
             ]
         ]
-
-
-stopClick : Html.Attribute (Msg docMsg)
-stopClick =
-    HE.stopPropagationOn "click" (D.succeed ( NoOp, True ))
 
 
 permissionsBody : Model doc -> Access -> Html (Msg docMsg)
@@ -1038,6 +1084,8 @@ permissionsBody model access =
                 , button [ HA.class "ws-btn", HE.onClick (AddPrincipal ReadersRole) ] [ text "+ Reader" ]
                 ]
             ]
+        , div [ HA.class "ws-modal-actions" ]
+            [ button [ HA.class "ws-btn ws-btn-primary", HE.onClick CloseDialog ] [ text "Done" ] ]
         ]
 
 

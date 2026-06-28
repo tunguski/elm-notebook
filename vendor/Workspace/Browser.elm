@@ -31,7 +31,6 @@ backend namespace =
     , save = save namespace
     , delete = delete namespace
     , saveIndex = saveIndex namespace
-    , newId = newId
     , fetchUrl = fetchUrl
     , query = Nothing
     , exportExcel = Nothing
@@ -95,38 +94,6 @@ delete ns id =
 saveIndex : String -> List Meta -> Cmd msg
 saveIndex ns metas =
     Storage.save (indexKey ns) (E.encode 0 (Serialize.encodeIndex metas))
-
-
-{-| Allocate the next id from the existing index — `d<n>` where `n` is one past the largest numeric
-suffix already present. A database backend would let the server assign ids instead. -}
-newId : List Meta -> Id
-newId metas =
-    "d" ++ String.fromInt (1 + List.foldl (\m acc -> Basics.max acc (suffixNum m.id)) 0 metas)
-
-
-suffixNum : Id -> Int
-suffixNum id =
-    String.toList id
-        |> List.reverse
-        |> takeWhileDigit
-        |> List.reverse
-        |> String.fromList
-        |> String.toInt
-        |> Maybe.withDefault 0
-
-
-takeWhileDigit : List Char -> List Char
-takeWhileDigit chars =
-    case chars of
-        c :: rest ->
-            if Char.isDigit c then
-                c :: takeWhileDigit rest
-
-            else
-                []
-
-        [] ->
-            []
 
 
 fetchUrl : String -> (Result String String -> msg) -> Cmd msg

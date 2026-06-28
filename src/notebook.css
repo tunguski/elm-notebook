@@ -841,3 +841,11 @@ a:hover { text-decoration: underline; }
     --ws-ok: #0f9d58;
     --ws-radius: 12px;
 }
+
+/* top nav (Examples / Workspace) */
+.nb-topnav { display: flex; align-items: center; justify-content: space-between; max-width: 1100px; margin: 0 auto; padding: 14px 20px 0; }
+.nb-brand { font-weight: 800; color: var(--ws-accent, #5b6ef5); letter-spacing: -.01em; }
+.nb-topnav-tabs { display: flex; gap: 6px; }
+.nb-tab { appearance: none; border: 1px solid var(--ws-border, #e2e8f2); background: #fff; border-radius: 999px; padding: 6px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--ws-muted, #61708a); }
+.nb-tab-active { background: var(--ws-accent, #5b6ef5); border-color: var(--ws-accent, #5b6ef5); color: #fff; }
+.nb-inline-link { appearance: none; border: none; background: none; padding: 0; color: var(--ws-accent, #5b6ef5); font: inherit; font-weight: 700; cursor: pointer; text-decoration: underline; }

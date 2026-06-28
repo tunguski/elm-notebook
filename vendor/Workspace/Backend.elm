@@ -14,7 +14,8 @@ the host's `msg`, so it carries no import cycle with the component's own `Msg`.
 Reads (`listMetas`, `load`, `fetchUrl`, `query`) take a result-tagging message. Writes (`save`,
 `delete`, `saveIndex`) are fire-and-forget: the component's in-memory model is the source of truth
 and updates optimistically. Documents cross this boundary as **raw JSON strings**, so `Backend`
-stays free of the host's `doc` type; the component (de)serialises with the host's codec.
+stays free of the host's `doc` type; the component (de)serialises with the host's codec. New
+document ids are random UUIDs minted by the component, so there is no `newId` to supply.
 
 @docs Backend, Context
 
@@ -38,7 +39,6 @@ type alias Backend msg =
     , save : Id -> String -> Cmd msg
     , delete : Id -> Cmd msg
     , saveIndex : List Meta -> Cmd msg
-    , newId : List Meta -> Id
     , fetchUrl : String -> (Result String String -> msg) -> Cmd msg
     , query : Maybe (String -> (Result String Table -> msg) -> Cmd msg)
     , exportExcel : Maybe ({ filename : String, table : Table } -> Cmd msg)
