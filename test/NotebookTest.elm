@@ -551,6 +551,18 @@ scopeTests =
         , check "case binding shadows but outer stays visible"
             "let x = 1 in\ncase 9 of\n    y ->\n        y + x"
             (n 10)
+
+        -- A `let` binding whose value is a `case`, FOLLOWED by a sibling binding. The layout lexer
+        -- renders both case-branch and let-binding separators as a bare `;`, so the case parser used
+        -- to swallow the sibling binding's `;` and fail ("expected '->' in case branch") — which, in
+        -- the single-module prelude, silently wiped every helper. The case must stop at the `;` that
+        -- belongs to the enclosing `let`.
+        , check "case-valued binding then sibling binding"
+            "let\n    a =\n        case 0 of\n            0 -> 1\n            _ -> 2\n    b = 10\nin\na + b"
+            (n 11)
+        , check "two case-valued bindings"
+            "let\n    a =\n        case 0 of\n            0 -> 1\n            _ -> 2\n    b =\n        case 1 of\n            1 -> 100\n            _ -> 200\nin\na + b"
+            (n 101)
         ]
 
 

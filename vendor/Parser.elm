@@ -588,7 +588,18 @@ parseBranches tokens acc =
                                     in
                                     case Tuple.second rb of
                                         TSemi :: afterSemi ->
-                                            parseBranches afterSemi branches
+                                            -- A `TSemi` continues the case only if another branch
+                                            -- (a pattern followed by `->`) actually follows. The
+                                            -- layout lexer emits the same `TSemi` for case-branch and
+                                            -- `let`-binding separators, so when a `case` is a let
+                                            -- binding's value FOLLOWED by a sibling binding, this
+                                            -- `TSemi` belongs to the enclosing `let`: stop and leave
+                                            -- it (and the binding after it) for the caller.
+                                            if startsCaseBranch afterSemi then
+                                                parseBranches afterSemi branches
+
+                                            else
+                                                Ok ( List.reverse branches, Tuple.second rb )
 
                                         rest ->
                                             Ok ( List.reverse branches, rest )
@@ -597,6 +608,19 @@ parseBranches tokens acc =
                     _ ->
                         Err "expected '->' in case branch"
             )
+
+
+{-| Whether `tokens` begins another `case` branch — a pattern immediately followed by `->`. Lets
+{@link parseBranches} tell a real branch separator from the `TSemi` of an enclosing `let` when a
+`case` is used as a let-binding value (the layout lexer renders both as a bare `TSemi`). -}
+startsCaseBranch : List Token -> Bool
+startsCaseBranch tokens =
+    case parsePattern tokens of
+        Ok ( _, TArrow :: _ ) ->
+            True
+
+        _ ->
+            False
 
 
 parsePattern : List Token -> Result String ( Pattern, List Token )
