@@ -66,8 +66,8 @@ cellLinks name value =
     case valueToTable value of
         Just table ->
             span [ HA.class "nb-export" ]
-                [ downloadLink "⬇ CSV" (name ++ ".csv") "text/csv" (Table.toCsv table)
-                , downloadLink "⬇ JSON" (name ++ ".json") "application/json" (Table.toJson table)
+                [ downloadLink "CSV" (name ++ ".csv") "text/csv" (Table.toCsv table)
+                , downloadLink "JSON" (name ++ ".json") "application/json" (Table.toJson table)
                 ]
 
         Nothing ->
@@ -81,4 +81,4 @@ downloadLink labelText filename mime content =
         , HA.href ("data:" ++ mime ++ ";charset=utf-8," ++ Url.percentEncode content)
         , HA.attribute "download" filename
         ]
-        [ text labelText ]
+        [ Html.i [ HA.class "bi bi-download" ] [], text (" " ++ labelText) ]

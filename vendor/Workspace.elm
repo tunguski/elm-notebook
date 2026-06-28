@@ -783,10 +783,10 @@ metaRow ctx meta =
             , visibilityBadge meta.access.visibility
             ]
         , div [ HA.class "ws-row-actions" ]
-            [ iconButton "ws-icon" "Open" "📂" (Open meta.id)
-            , iconButton "ws-icon" "Make a copy" "⧉" (Duplicate meta.id)
+            [ iconButton "ws-icon" "Open" "bi-folder2-open" (Open meta.id)
+            , iconButton "ws-icon" "Make a copy" "bi-files" (Duplicate meta.id)
             , if Permissions.canWrite ctx meta.access then
-                iconButton "ws-icon ws-icon-danger" "Delete" "🗑" (Delete meta.id)
+                iconButton "ws-icon ws-icon-danger" "Delete" "bi-trash" (Delete meta.id)
 
               else
                 text ""
@@ -795,9 +795,9 @@ metaRow ctx meta =
 
 
 iconButton : String -> String -> String -> Msg docMsg -> Html (Msg docMsg)
-iconButton cls titleText glyph msg =
+iconButton cls titleText icon msg =
     button [ HA.class ("ws-btn " ++ cls), HA.title titleText, HE.onClick msg ]
-        [ span [ HA.attribute "aria-hidden" "true" ] [ text glyph ] ]
+        [ Html.i [ HA.class ("bi " ++ icon) ] [] ]
 
 
 visibilityBadge : Visibility -> Html (Msg docMsg)
@@ -895,16 +895,16 @@ editorBar config c ctx model stored writable =
                                 ""
                            )
                     )
+                , HA.title "Show / hide comments"
                 , HE.onClick ToggleComments
                 ]
-                [ text
-                    ("💬"
-                        ++ (if commentTotal > 0 then
-                                " " ++ String.fromInt commentTotal
+                [ Html.i [ HA.class "bi bi-chat-dots" ] []
+                , text
+                    (if commentTotal > 0 then
+                        " " ++ String.fromInt commentTotal
 
-                            else
-                                ""
-                           )
+                     else
+                        ""
                     )
                 ]
             , button [ HA.class "ws-btn", HE.onClick (OpenDialog PermissionsDialog) ] [ text "Share" ]

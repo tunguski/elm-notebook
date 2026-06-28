@@ -2,23 +2,29 @@ module Main exposing (main)
 
 {-| The elm-notebook site.
 
-Two views, switched by a top nav and reflected in the URL hash so a page is safe to reload and
-links are shareable:
+Two views, reflected in the URL hash so a page is safe to reload, links are shareable, and the
+browser Back/Forward buttons work:
 
   - **Examples** (`#`) — a standalone notebook playground (the original single-notebook experience:
-    guided lessons, a live notebook, suggestions), with nothing saved.
-  - **Workspace** (`#workspace`, and `#doc/<uuid>` per document) — many saved notebooks with naming,
+    guided lessons, a live notebook, suggestions), with nothing saved. The hero links into the
+    workspace.
+  - **Workspace** (`#workspace`, and `#<uuid>` per document) — many saved notebooks with naming,
     search, copy, sharing/permissions, comments, import, SQL and export, from the reusable
     [`Workspace`](Workspace) component over the [`Notebook.Workspace`](Notebook-Workspace) document.
+
+There is no top navbar: the workspace is reached from the hero link, and the browser's Back button
+returns to the examples (the app polls the URL hash, since `Browser.element` has no hash-change
+subscription and `Browser.application` would intercept the data-URI export download links).
 
 -}
 
 import Browser
 import Browser.Navigation as Nav
-import Html exposing (Html, a, button, div, footer, h1, header, nav, p, span, text)
+import Html exposing (Html, a, button, div, footer, h1, header, p, span, text)
 import Html.Attributes as HA
 import Html.Events as HE
 import Notebook.Workspace as NB exposing (NbDoc, NbMsg)
+import Time
 import Workspace
 import Workspace.Backend exposing (Backend, Context)
 import Workspace.Browser
@@ -61,6 +67,7 @@ type alias Model =
     { route : Route
     , ws : Workspace.Model NbDoc
     , demo : NbDoc
+    , hash : String
     }
 
 
@@ -69,6 +76,7 @@ type Msg
     | DemoMsg NbMsg
     | SetRoute Route
     | GotHash String
+    | Poll
 
 
 init : () -> ( Model, Cmd Msg )
@@ -77,7 +85,7 @@ init _ =
         ( ws, wsCmd ) =
             Workspace.init backend
     in
-    ( { route = Examples, ws = ws, demo = NB.examples }
+    ( { route = Examples, ws = ws, demo = NB.examples, hash = "" }
     , Cmd.batch [ Cmd.map WsMsg wsCmd, Nav.getHash GotHash ]
     )
 
@@ -90,15 +98,33 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         GotHash raw ->
-            -- routing comes *from* the URL here, so don't write the hash back
-            applyHash raw model
+            -- the URL changed (initial load, or Back/Forward) — route from it, don't write it back
+            let
+                h =
+                    normalizeHash raw
+            in
+            if h == model.hash then
+                ( model, Cmd.none )
+
+            else
+                applyHash h { model | hash = h }
+
+        Poll ->
+            ( model, Nav.getHash GotHash )
 
         _ ->
             let
                 ( next, cmd ) =
                     updateInner msg model
+
+                desired =
+                    toHash next
             in
-            ( next, Cmd.batch [ cmd, syncHash model next ] )
+            if desired == next.hash then
+                ( next, cmd )
+
+            else
+                ( { next | hash = desired }, Cmd.batch [ cmd, Nav.setHash desired ] )
 
 
 updateInner : Msg -> Model -> ( Model, Cmd Msg )
@@ -117,13 +143,18 @@ updateInner msg model =
         SetRoute route ->
             ( { model | route = route }, Cmd.none )
 
-        GotHash _ ->
+        _ ->
             ( model, Cmd.none )
 
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.map WsMsg (Workspace.subscriptions model.ws)
+    Sub.batch
+        [ Sub.map WsMsg (Workspace.subscriptions model.ws)
+
+        -- poll the URL hash so the browser Back/Forward buttons change the view
+        , Time.every 400 (always Poll)
+        ]
 
 
 
@@ -146,23 +177,9 @@ toHash model =
                     "workspace"
 
 
-syncHash : Model -> Model -> Cmd Msg
-syncHash old next =
-    if toHash old == toHash next then
-        Cmd.none
-
-    else
-        Nav.setHash (toHash next)
-
-
-{-| Apply a hash read from the URL: pick the route and, for `doc/<id>`, ask the workspace to open
-that document. -}
+{-| Route from a hash read off the URL (already normalised); model.hash is assumed up to date. -}
 applyHash : String -> Model -> ( Model, Cmd Msg )
-applyHash raw model =
-    let
-        h =
-            normalizeHash raw
-    in
+applyHash h model =
     if h == "" then
         ( { model | route = Examples }, Cmd.none )
 
@@ -178,9 +195,7 @@ applyHash raw model =
 
 normalizeHash : String -> String
 normalizeHash raw =
-    raw
-        |> dropPrefixChar '#'
-        |> dropPrefixChar '/'
+    raw |> dropPrefixChar '#' |> dropPrefixChar '/'
 
 
 dropPrefixChar : Char -> String -> String
@@ -199,8 +214,7 @@ dropPrefixChar c s =
 view : Model -> Html Msg
 view model =
     div [ HA.class "nb-app" ]
-        [ topNav model.route
-        , case model.route of
+        [ case model.route of
             Examples ->
                 div []
                     [ pageHeader
@@ -211,34 +225,6 @@ view model =
                 Html.map WsMsg (Workspace.view NB.config backend ctx model.ws)
         , pageFooter
         ]
-
-
-topNav : Route -> Html Msg
-topNav route =
-    nav [ HA.class "nb-topnav" ]
-        [ span [ HA.class "nb-brand" ] [ text "elm-notebook" ]
-        , div [ HA.class "nb-topnav-tabs" ]
-            [ tab "Examples" (route == Examples) (SetRoute Examples)
-            , tab "Workspace" (route == Wsp) (SetRoute Wsp)
-            ]
-        ]
-
-
-tab : String -> Bool -> Msg -> Html Msg
-tab label active msg =
-    button
-        [ HA.class
-            ("nb-tab"
-                ++ (if active then
-                        " nb-tab-active"
-
-                    else
-                        ""
-                   )
-            )
-        , HE.onClick msg
-        ]
-        [ text label ]
 
 
 pageHeader : Html Msg

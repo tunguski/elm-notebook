@@ -274,7 +274,7 @@ commentMarker config cell =
     in
     if config.commentsVisible && n > 0 then
         span [ HA.class "nb-comment-marker", HA.title "This cell has comments" ]
-            [ text ("💬 " ++ String.fromInt n) ]
+            [ Html.i [ HA.class "bi bi-chat-dots" ] [], text (" " ++ String.fromInt n) ]
 
     else
         text ""
