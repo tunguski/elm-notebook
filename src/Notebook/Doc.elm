@@ -2,8 +2,8 @@ module Notebook.Doc exposing
     ( Doc, empty, fromSpec
     , append, appendInput, insertAfter, remove, moveUp, moveDown
     , setSource, setKind, setInputValue, setInputName, setInputControl
-    , runAll, runThrough, clearOutputs
-    , find, lastValue, codeCount, variables
+    , runAll, runThrough, runAffected, clearOutputs
+    , find, lastValue, codeCount, variables, executableIds
     )
 
 {-| The notebook **document**: an ordered list of [`Cell`](Notebook-Cell#Cell)s plus the
@@ -24,6 +24,7 @@ are always a faithful, reproducible function of the source — no hidden out-of-
 import Lang exposing (Value)
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), InputSpec, Output(..))
 import Notebook.Kernel as Kernel exposing (Kernel)
+import Set exposing (Set)
 
 
 {-| A notebook: its cells, the id to hand the next new cell, and the current kernel. -}
@@ -225,6 +226,39 @@ runFrom stopAt doc =
             List.foldl step ( Kernel.empty, False, [] ) doc.cells
     in
     { doc | cells = List.reverse reversed, kernel = finalKernel }
+
+
+{-| Reactively re-run: execute every cell from a fresh kernel (so all later bindings stay correct),
+but only **refresh the displayed output** of the cells in `affectedIds`; the rest keep their last
+output. Used by [`Notebook.Deps`](Notebook-Deps)-driven "run what this change affects". -}
+runAffected : Set Int -> Doc -> Doc
+runAffected affectedIds doc =
+    let
+        step cell ( kernel, acc ) =
+            if Cell.isExecutable cell then
+                let
+                    ( output, kernel2 ) =
+                        Kernel.run cell.source kernel
+                in
+                if Set.member cell.id affectedIds then
+                    ( kernel2, { cell | output = output, count = Just kernel2.count } :: acc )
+
+                else
+                    ( kernel2, cell :: acc )
+
+            else
+                ( kernel, cell :: acc )
+
+        ( finalKernel, reversed ) =
+            List.foldl step ( Kernel.empty, [] ) doc.cells
+    in
+    { doc | cells = List.reverse reversed, kernel = finalKernel }
+
+
+{-| The ids of every executable (code / input) cell, in order. -}
+executableIds : Doc -> List Int
+executableIds doc =
+    doc.cells |> List.filter Cell.isExecutable |> List.map .id
 
 
 {-| Clear every output and reset the kernel. -}

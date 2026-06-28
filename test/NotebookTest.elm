@@ -15,7 +15,10 @@ import Expect exposing (Expectation)
 import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
 import Notebook.Csv as Csv
+import Notebook.Deps as Deps
 import Notebook.Doc as Doc
+import Notebook.Hint as Hint
+import Set
 import Notebook.Export as Export
 import Notebook.Kernel as Kernel
 import Notebook.Serialize as Serialize
@@ -33,6 +36,9 @@ suite =
         , recordTests
         , tableTests
         , preludeTests
+        , analysisTests
+        , depsTests
+        , hintTests
         , controlFlowTests
         , scopeTests
         , parsingTests
@@ -69,6 +75,23 @@ exportTests =
         , test "a scalar is not exportable" <|
             \_ ->
                 Export.valueToTable (VNum 42) |> Expect.equal Nothing
+        , test "notebook → Markdown has prose, fenced code and the output value" <|
+            \_ ->
+                let
+                    md =
+                        Export.toMarkdown
+                            (Doc.empty |> Doc.append Markdown "# Title" |> Doc.append Code "1 + 2" |> Doc.runAll)
+                in
+                Expect.equal True
+                    (String.contains "# Title" md && String.contains "```elm" md && String.contains "`3`" md)
+        , test "notebook → Elm keeps declarations and names bare expressions" <|
+            \_ ->
+                let
+                    elm =
+                        Export.toElm (Doc.empty |> Doc.append Code "x = 5" |> Doc.append Code "x + 1")
+                in
+                Expect.equal True
+                    (String.contains "module Notebook" elm && String.contains "x = 5" elm && String.contains "out2 =" elm)
         ]
 
 
@@ -209,6 +232,22 @@ evalErr src =
 
         OutNone ->
             Expect.fail (src ++ " produced no output")
+
+
+{-| Assert a numeric result within a small epsilon — for ratios (correlation) where exact
+Float equality is brittle. -}
+evalApprox : String -> Float -> Expectation
+evalApprox src expected =
+    case evalOnce src of
+        OutValue (VNum x) ->
+            if abs (x - expected) < 1.0e-6 then
+                Expect.pass
+
+            else
+                Expect.fail (src ++ "  ⇒  " ++ String.fromFloat x ++ "  (expected ≈ " ++ String.fromFloat expected ++ ")")
+
+        other ->
+            Expect.fail (src ++ "  ⇒  not a number: " ++ Maybe.withDefault "?" (inlineOf other))
 
 
 check : String -> String -> Value -> Test
@@ -358,6 +397,117 @@ preludeTests =
             (vlist [ n 2, n 1 ])
         ]
 
+
+
+-- ANALYSIS PRELUDE -----------------------------------------------------------
+
+
+analysisTests : Test
+analysisTests =
+    describe "analysis prelude (corr · linfit · quantile · summarize)"
+        [ check "minOf" "minOf [ 3, 1, 4, 1, 5 ]" (n 1)
+        , check "maxOf" "maxOf [ 3, 1, 4, 1, 5 ]" (n 5)
+        , check "spread" "spread [ 3, 1, 4, 1, 5 ]" (n 4)
+        , check "cumSum" "cumSum [ 1, 2, 3, 4 ]" (vlist [ n 1, n 3, n 6, n 10 ])
+        , check "normalize" "normalize [ 0, 5, 10 ]" (vlist [ n 0, n 0.5, n 1 ])
+        , check "zip" "zip [ 1, 2 ] [ 3, 4 ]" (vlist [ VTup [ n 1, n 3 ], VTup [ n 2, n 4 ] ])
+        , check "sortDesc" "sortDesc [ 3, 1, 2 ]" (vlist [ n 3, n 2, n 1 ])
+        , check "quantile median" "quantile 0.5 [ 1, 2, 3 ]" (n 2)
+        , check "percentile max" "percentile 100 [ 1, 2, 3, 4 ]" (n 4)
+        , check "linfit slope" "(linfit [ 1, 2, 3 ] [ 2, 4, 6 ]).slope" (n 2)
+        , check "linfit intercept" "(linfit [ 1, 2, 3 ] [ 2, 4, 6 ]).intercept" (n 0)
+        , check "predict" "predict (linfit [ 1, 2, 3 ] [ 2, 4, 6 ]) 4" (n 8)
+        , test "corr of a perfect line is 1" (\_ -> evalApprox "corr [ 1, 2, 3 ] [ 2, 4, 6 ]" 1.0)
+        , test "cov of constants is 0" (\_ -> evalApprox "cov [ 1, 2, 3 ] [ 5, 5, 5 ]" 0.0)
+        , check "summarize sum"
+            ("(nth 0 (summarize (\\r -> r.dept) (\\r -> r.salary) " ++ peopleSrc ++ ")).sum")
+            (n 220)
+        , check "summarize mean"
+            ("(nth 0 (summarize (\\r -> r.dept) (\\r -> r.salary) " ++ peopleSrc ++ ")).mean")
+            (n 110)
+        , check "countBy Eng count"
+            ("(nth 0 (countBy (\\r -> r.dept) " ++ peopleSrc ++ ")).count")
+            (n 2)
+        ]
+
+
+-- DEPENDENCY ANALYSIS (reactive execution) -----------------------------------
+
+
+depsDoc : Doc.Doc
+depsDoc =
+    Doc.empty
+        |> Doc.append Code "a = 1"
+        |> Doc.append Code "b = a + 1"
+        |> Doc.append Code "c = 99"
+        |> Doc.append Code "d = b * 2"
+
+
+hasOutput : Int -> Doc.Doc -> Bool
+hasOutput id doc =
+    case Doc.find id doc of
+        Just cell ->
+            case cell.output of
+                OutNone ->
+                    False
+
+                _ ->
+                    True
+
+        Nothing ->
+            False
+
+
+depsTests : Test
+depsTests =
+    describe "dependency analysis (reactive execution)"
+        [ test "defines: declaration names plus _" <|
+            \_ -> Expect.equal [ "_", "x" ] (Deps.defines (Cell.code 7 "x = 5"))
+        , test "defines: a bare expression binds only _" <|
+            \_ -> Expect.equal [ "_" ] (Deps.defines (Cell.code 7 "1 + 2"))
+        , test "defines: markdown binds nothing" <|
+            \_ -> Expect.equal [] (Deps.defines (Cell.markdown 7 "# hi"))
+        , test "refs: collects identifiers but not field names" <|
+            \_ ->
+                Expect.equal ( True, False )
+                    ( List.member "x" (Deps.refs (Cell.code 7 "x + y"))
+                    , List.member "salary" (Deps.refs (Cell.code 7 "r.salary"))
+                    )
+        , test "affected: a cell plus its transitive downstream" <|
+            \_ -> Expect.equal [ 1, 2, 4 ] (Set.toList (Deps.affected 1 depsDoc))
+        , test "affected: an independent cell affects only itself" <|
+            \_ -> Expect.equal [ 3 ] (Set.toList (Deps.affected 3 depsDoc))
+        , test "runAffected refreshes only the given cells, not their unrelated siblings" <|
+            \_ ->
+                let
+                    ran =
+                        Doc.runAffected (Set.fromList [ 1, 2 ]) depsDoc
+                in
+                Expect.equal ( True, False ) ( hasOutput 2 ran, hasOutput 4 ran )
+        ]
+
+
+-- SMART ERROR HELP (Notebook.Hint) -------------------------------------------
+
+
+hintTests : Test
+hintTests =
+    describe "smart error help (did-you-mean)"
+        [ test "edit distance: one substitution" <|
+            \_ -> Expect.equal 1 (Hint.distance "mean" "men")
+        , test "edit distance: identical" <|
+            \_ -> Expect.equal 0 (Hint.distance "groupBy" "groupBy")
+        , test "edit distance: insertions" <|
+            \_ -> Expect.equal 2 (Hint.distance "ab" "abcd")
+        , test "unboundName pulls the name out of an undefined-variable message" <|
+            \_ -> Expect.equal (Just "maen") (Hint.unboundName "undefined variable: maen")
+        , test "unboundName ignores unrelated errors" <|
+            \_ -> Expect.equal Nothing (Hint.unboundName "type mismatch in argument")
+        , test "closest finds the near in-scope name" <|
+            \_ -> Expect.equal (Just "mean") (Hint.closest "maen" [ "mean", "median", "groupBy" ])
+        , test "closest stays silent when nothing is near" <|
+            \_ -> Expect.equal Nothing (Hint.closest "xyzzy" [ "mean", "total" ])
+        ]
 
 
 -- CONTROL FLOW ---------------------------------------------------------------

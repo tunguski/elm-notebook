@@ -1,4 +1,4 @@
-module CodeEditor exposing (Config, view)
+module CodeEditor exposing (Config, Chord, view)
 
 {-| A small, self-contained syntax-highlighted code-editing widget, factored out of the editor so it
 can be reused over **any** language — not just the interpreted Elm of `Editor`. It is the
@@ -42,8 +42,14 @@ type alias Config msg =
     , gutter : Bool
     , highlight : String -> List ( String, String )
     , onChange : String -> Int -> msg
-    , onSubmit : Maybe msg
+    , onKey : Maybe (Chord -> Maybe msg)
     }
+
+
+{-| A keydown reduced to what the host cares about: the key name and the modifiers held. The host's
+`onKey` returns `Just msg` to handle (and swallow) the keystroke, or `Nothing` to let it through. -}
+type alias Chord =
+    { key : String, shift : Bool, ctrl : Bool, meta : Bool, alt : Bool }
 
 
 view : Config msg -> Html msg
@@ -62,7 +68,7 @@ view cfg =
                     (onEdit cfg.onChange
                         :: value cfg.source
                         :: class "ce-code ce-textarea"
-                        :: submitAttr cfg.onSubmit
+                        :: keyAttr cfg.onKey
                     )
                     []
                 ]
@@ -70,31 +76,35 @@ view cfg =
         ]
 
 
-{-| Run the cell on Ctrl/Cmd/Shift+Enter, swallowing the keystroke so no newline is inserted. -}
-submitAttr : Maybe msg -> List (Html.Attribute msg)
-submitAttr maybeMsg =
-    case maybeMsg of
+{-| Route keydowns through the host's `onKey`: a `Just msg` handles and swallows the keystroke (so
+e.g. Ctrl+Enter runs without inserting a newline, Alt+Arrow moves without scrolling); a `Nothing`
+lets the key fall through to normal text editing. -}
+keyAttr : Maybe (Chord -> Maybe msg) -> List (Html.Attribute msg)
+keyAttr maybeHandler =
+    case maybeHandler of
         Nothing ->
             []
 
-        Just msg ->
-            [ preventDefaultOn "keydown" (submitDecoder msg) ]
+        Just handler ->
+            [ preventDefaultOn "keydown" (chordDecoder handler) ]
 
 
-submitDecoder : msg -> Decode.Decoder ( msg, Bool )
-submitDecoder msg =
-    Decode.map4 (\key shift ctrl meta -> key == "Enter" && (shift || ctrl || meta))
+chordDecoder : (Chord -> Maybe msg) -> Decode.Decoder ( msg, Bool )
+chordDecoder handler =
+    Decode.map5 Chord
         (Decode.field "key" Decode.string)
         (Decode.field "shiftKey" Decode.bool)
         (Decode.field "ctrlKey" Decode.bool)
         (Decode.field "metaKey" Decode.bool)
+        (Decode.field "altKey" Decode.bool)
         |> Decode.andThen
-            (\isSubmit ->
-                if isSubmit then
-                    Decode.succeed ( msg, True )
+            (\chord ->
+                case handler chord of
+                    Just msg ->
+                        Decode.succeed ( msg, True )
 
-                else
-                    Decode.fail "not a submit chord"
+                    Nothing ->
+                        Decode.fail "unhandled key"
             )
 
 

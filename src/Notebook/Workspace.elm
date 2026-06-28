@@ -23,24 +23,48 @@ import Html.Events as HE
 import Json.Decode as D
 import Notebook.Chart as Chart
 import Notebook.Csv as Csv
+import Notebook.Deps as Deps
 import Notebook.Doc as Doc exposing (Doc)
-import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..))
+import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
 import Notebook.Export as Export
+import Notebook.Hint as Hint
+import Notebook.Kernel as Kernel
 import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest exposing (Lesson, Suggestion)
 import Notebook.View as NbView
+import Set exposing (Set)
 import Workspace
 import Workspace.Table as Table
 import Workspace.Types exposing (Table)
 
 
-{-| A notebook document plus its transient editor state. -}
+{-| A notebook document plus its transient editor state. `stale` holds the cells whose displayed
+output no longer reflects an upstream edit (see [`Notebook.Deps`](Notebook-Deps)). -}
 type alias NbDoc =
     { doc : Doc
     , carets : Dict Int Int
     , charts : Dict Int Chart.ChartKind
+    , cols : Dict Int String
+    , tables : Dict Int TableState
     , lesson : String
+    , stale : Set Int
     }
+
+
+{-| Per-cell interactive-table state: the sort column + direction, the row filter, and whether the
+row cap is lifted. Updated here (the owning module) to avoid a cross-module record-update miscompile. -}
+type alias TableState =
+    { sortCol : Maybe String, desc : Bool, filter : String, expanded : Bool }
+
+
+defaultTable : TableState
+defaultTable =
+    { sortCol = Nothing, desc = False, filter = "", expanded = False }
+
+
+tableOf : Int -> NbDoc -> TableState
+tableOf id nb =
+    Dict.get id nb.tables |> Maybe.withDefault defaultTable
 
 
 {-| The notebook editor's messages (everything the old single-notebook `Main` handled). -}
@@ -48,6 +72,8 @@ type NbMsg
     = Edit Int String Int
     | Run Int
     | RunAll
+    | RunStale
+    | Fix Int String
     | DeleteCell Int
     | MoveUp Int
     | MoveDown Int
@@ -59,6 +85,10 @@ type NbMsg
     | Clear
     | LoadLesson Lesson
     | SetChart Int (Maybe Chart.ChartKind)
+    | SetCol Int String
+    | SortBy Int String
+    | FilterRows Int String
+    | ExpandTable Int Bool
     | InsertName String
     | SetInputValue Int String
     | SetInputName Int String
@@ -87,7 +117,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, lesson = "" }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -99,7 +129,10 @@ empty =
             |> Doc.runAll
     , carets = Dict.empty
     , charts = Dict.empty
+    , cols = Dict.empty
+    , tables = Dict.empty
     , lesson = ""
+    , stale = Set.empty
     }
 
 
@@ -110,7 +143,10 @@ examples =
     { doc = Doc.fromSpec Suggest.starter |> Doc.runAll
     , carets = Dict.empty
     , charts = Dict.empty
+    , cols = Dict.empty
+    , tables = Dict.empty
     , lesson = "starter"
+    , stale = Set.empty
     }
 
 
@@ -165,13 +201,41 @@ updateNb : NbMsg -> NbDoc -> NbDoc
 updateNb msg nb =
     case msg of
         Edit id source caret ->
-            { nb | doc = Doc.setSource id source nb.doc, carets = Dict.insert id caret nb.carets }
+            let
+                doc2 =
+                    Doc.setSource id source nb.doc
+            in
+            -- the edited cell and everything downstream of it now need re-running
+            { nb
+                | doc = doc2
+                , carets = Dict.insert id caret nb.carets
+                , stale = Set.union nb.stale (Deps.affected id doc2)
+            }
 
         Run id ->
-            { nb | doc = Doc.runThrough id nb.doc }
+            -- reactively refresh this cell and exactly the cells that depend on it
+            let
+                hit =
+                    Deps.affected id nb.doc
+            in
+            { nb | doc = Doc.runAffected hit nb.doc, stale = Set.diff nb.stale hit }
 
         RunAll ->
-            { nb | doc = Doc.runAll nb.doc }
+            { nb | doc = Doc.runAll nb.doc, stale = Set.empty }
+
+        RunStale ->
+            { nb | doc = Doc.runAffected nb.stale nb.doc, stale = Set.empty }
+
+        Fix id src ->
+            -- a one-click "did you mean…?" fix: replace the cell's source and re-run what it affects
+            let
+                doc2 =
+                    Doc.setSource id src nb.doc
+
+                hit =
+                    Deps.affected id doc2
+            in
+            { nb | doc = Doc.runAffected hit doc2, stale = Set.diff nb.stale hit }
 
         DeleteCell id ->
             { nb | doc = Doc.remove id nb.doc }
@@ -198,10 +262,14 @@ updateNb msg nb =
             { nb | doc = Doc.appendInput defaultInput nb.doc |> Doc.runAll }
 
         Clear ->
-            { nb | doc = Doc.clearOutputs nb.doc }
+            let
+                doc2 =
+                    Doc.clearOutputs nb.doc
+            in
+            { nb | doc = doc2, stale = Set.fromList (Doc.executableIds doc2) }
 
         LoadLesson lesson ->
-            { nb | doc = Doc.fromSpec lesson.cells |> Doc.runAll, lesson = lesson.id, carets = Dict.empty, charts = Dict.empty }
+            { nb | doc = Doc.fromSpec lesson.cells |> Doc.runAll, lesson = lesson.id, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, stale = Set.empty }
 
         SetChart id maybeKind ->
             { nb
@@ -213,6 +281,37 @@ updateNb msg nb =
                         Nothing ->
                             Dict.remove id nb.charts
             }
+
+        SetCol id colName ->
+            { nb | cols = Dict.insert id colName nb.cols }
+
+        SortBy id colName ->
+            let
+                st =
+                    tableOf id nb
+
+                next =
+                    if st.sortCol == Just colName then
+                        { st | desc = not st.desc }
+
+                    else
+                        { st | sortCol = Just colName, desc = False }
+            in
+            { nb | tables = Dict.insert id next nb.tables }
+
+        FilterRows id needle ->
+            let
+                st =
+                    tableOf id nb
+            in
+            { nb | tables = Dict.insert id { st | filter = needle } nb.tables }
+
+        ExpandTable id flag ->
+            let
+                st =
+                    tableOf id nb
+            in
+            { nb | tables = Dict.insert id { st | expanded = flag } nb.tables }
 
         InsertName name ->
             { nb | doc = nb.doc |> Doc.append Code name |> Doc.runAll }
@@ -267,14 +366,15 @@ viewNb : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
 viewNb showCopy env nb =
     div [ HA.class "nb-workspace" ]
         [ lessonBar nb.lesson
-        , toolbar showCopy
+        , toolbar showCopy (Set.size nb.stale) nb.doc
         , section [ HA.class "nb-main" ]
             [ div [ HA.class "nb-notebook" ]
                 [ NbView.notebook (viewConfig env nb) nb.doc
-                , toolbar showCopy
+                , toolbar showCopy (Set.size nb.stale) nb.doc
                 ]
             , div [ HA.class "nb-sidebar" ]
-                [ NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
+                [ NbView.errorsPanel Run (errorList nb.doc)
+                , NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
                 , NbView.variablesPanel InsertName (Doc.variables nb.doc)
                 ]
             ]
@@ -293,13 +393,72 @@ viewConfig env nb =
     , caretOf = \id -> Dict.get id nb.carets |> Maybe.withDefault 0
     , chartOf = \id -> Dict.get id nb.charts
     , onChart = SetChart
+    , colOf = \id -> Dict.get id nb.cols
+    , onCol = SetCol
     , onInputValue = SetInputValue
     , onInputName = SetInputName
     , onInputControl = SetInputControl
     , commentsVisible = env.commentsVisible
     , commentCountOf = \id -> env.commentCount (String.fromInt id)
     , exportCell = \cell -> exportCell cell
+    , isStale = \id -> Set.member id nb.stale
+    , errorFix = errorFix nb
+    , onFix = Fix
+    , tableSort = \id -> (tableOf id nb).sortCol |> Maybe.map (\c -> ( c, (tableOf id nb).desc ))
+    , onSort = SortBy
+    , tableFilter = \id -> (tableOf id nb).filter
+    , onFilter = FilterRows
+    , tableExpanded = \id -> (tableOf id nb).expanded
+    , onExpand = ExpandTable
     }
+
+
+{-| For a cell that failed on an unbound name, a "Did you mean …?" fix: the nearest in-scope name
+and the cell's source with the first occurrence of the typo replaced. -}
+errorFix : NbDoc -> Cell -> Maybe { label : String, fixed : String }
+errorFix nb cell =
+    case cell.output of
+        OutError message ->
+            Hint.unboundName message
+                |> Maybe.andThen
+                    (\wrong ->
+                        Hint.closest wrong (Kernel.names nb.doc.kernel)
+                            |> Maybe.map
+                                (\good ->
+                                    { label = "Did you mean " ++ good ++ "?"
+                                    , fixed = replaceFirst wrong good cell.source
+                                    }
+                                )
+                    )
+
+        _ ->
+            Nothing
+
+
+{-| The cells currently in error, as `(id, count, message)` for the errors panel. -}
+errorList : Doc -> List ( Int, Int, String )
+errorList doc =
+    doc.cells
+        |> List.filterMap
+            (\c ->
+                case c.output of
+                    OutError message ->
+                        Just ( c.id, Maybe.withDefault 0 c.count, message )
+
+                    _ ->
+                        Nothing
+            )
+
+
+{-| Replace the first whole-word occurrence of `wrong` with `good` in `source`. -}
+replaceFirst : String -> String -> String -> String
+replaceFirst wrong good source =
+    case String.indexes wrong source of
+        i :: _ ->
+            String.left i source ++ good ++ String.dropLeft (i + String.length wrong) source
+
+        [] ->
+            source
 
 
 exportCell : Cell -> Html NbMsg
@@ -312,14 +471,21 @@ exportCell cell =
             text ""
 
 
-toolbar : Bool -> Html NbMsg
-toolbar showCopy =
+toolbar : Bool -> Int -> Doc -> Html NbMsg
+toolbar showCopy staleCount doc =
     section [ HA.class "nb-actions" ]
         [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
+        , if staleCount > 0 then
+            button [ HA.class "nb-action nb-action-stale", HE.onClick RunStale, HA.title "Re-run the cells affected by your edits" ]
+                [ Html.i [ HA.class "bi bi-arrow-repeat" ] [], text (" Run stale (" ++ String.fromInt staleCount ++ ")") ]
+
+          else
+            text ""
         , button [ HA.class "nb-action", HE.onClick AddCode ] [ text "+ Code cell" ]
         , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text "+ Text cell" ]
         , button [ HA.class "nb-action", HE.onClick AddInput ] [ text "+ Input" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
+        , span [ HA.class "nb-action-export" ] [ Export.notebookLinks doc ]
         , if showCopy then
             button [ HA.class "nb-action nb-action-copy", HE.onClick CopyToWorkspaceRequested ]
                 [ Html.i [ HA.class "bi bi-folder-plus" ] [], text " Copy to workspace" ]

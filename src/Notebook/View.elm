@@ -1,4 +1,4 @@
-module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, valueHtml, markdownHtml)
+module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, valueHtml, markdownHtml)
 
 {-| The HTML view of a notebook: syntax-highlighted, auto-growing editors, outputs rendered as
 scalars / records / tables (recursively, so nested tables nest) / headerless 2-D grids / errors,
@@ -38,12 +38,23 @@ type alias Config msg =
     , caretOf : Int -> Int
     , chartOf : Int -> Maybe ChartKind
     , onChart : Int -> Maybe ChartKind -> msg
+    , colOf : Int -> Maybe String
+    , onCol : Int -> String -> msg
     , onInputValue : Int -> String -> msg
     , onInputName : Int -> String -> msg
     , onInputControl : Int -> String -> msg
     , commentsVisible : Bool
     , commentCountOf : Int -> Int
     , exportCell : Cell -> Html msg
+    , isStale : Int -> Bool
+    , errorFix : Cell -> Maybe { label : String, fixed : String }
+    , onFix : Int -> String -> msg
+    , tableSort : Int -> Maybe ( String, Bool )
+    , onSort : Int -> String -> msg
+    , tableFilter : Int -> String
+    , onFilter : Int -> String -> msg
+    , tableExpanded : Int -> Bool
+    , onExpand : Int -> Bool -> msg
     }
 
 
@@ -189,9 +200,29 @@ litText spec =
 
 codeCellView : Config msg -> Cell -> Html msg
 codeCellView config cell =
-    div [ HA.class "nb-cell nb-cell-code" ]
+    let
+        stale =
+            config.isStale cell.id
+    in
+    div
+        [ HA.class
+            ("nb-cell nb-cell-code"
+                ++ (if stale then
+                        " nb-cell-stale"
+
+                    else
+                        ""
+                   )
+            )
+        ]
         [ div [ HA.class "nb-gutter" ]
-            [ span [ HA.class "nb-prompt" ] [ text (promptLabel "In" cell.count) ] ]
+            [ span [ HA.class "nb-prompt" ] [ text (promptLabel "In" cell.count) ]
+            , if stale then
+                span [ HA.class "nb-stale-dot", HA.title "Stale — an upstream cell changed; Run to refresh" ] [ text "●" ]
+
+              else
+                text ""
+            ]
         , div [ HA.class "nb-body" ]
             [ CodeEditor.view
                 { source = cell.source
@@ -199,7 +230,7 @@ codeCellView config cell =
                 , gutter = True
                 , highlight = Highlight.segments
                 , onChange = config.onEdit cell.id
-                , onSubmit = Just (config.onRun cell.id)
+                , onKey = Just (codeKeys config cell)
                 }
             , cellToolbar config cell
             , outputArea config cell
@@ -219,11 +250,34 @@ markdownCellView config cell =
                 , gutter = False
                 , highlight = plainSegments
                 , onChange = config.onEdit cell.id
-                , onSubmit = Nothing
+                , onKey = Just (moveKeys config cell)
                 }
             , cellToolbar config cell
             ]
         ]
+
+
+{-| Keyboard chords for a code cell: Shift/Ctrl/Cmd+Enter runs it; Alt+↑/↓ moves it. -}
+codeKeys : Config msg -> Cell -> CodeEditor.Chord -> Maybe msg
+codeKeys config cell chord =
+    if chord.key == "Enter" && (chord.shift || chord.ctrl || chord.meta) then
+        Just (config.onRun cell.id)
+
+    else
+        moveKeys config cell chord
+
+
+{-| Alt+↑/↓ moves the cell (used by every cell kind). -}
+moveKeys : Config msg -> Cell -> CodeEditor.Chord -> Maybe msg
+moveKeys config cell chord =
+    if chord.alt && chord.key == "ArrowUp" then
+        Just (config.onMoveUp cell.id)
+
+    else if chord.alt && chord.key == "ArrowDown" then
+        Just (config.onMoveDown cell.id)
+
+    else
+        Nothing
 
 
 plainSegments : String -> List ( String, String )
@@ -294,7 +348,20 @@ outputArea config cell =
         OutError message ->
             div [ HA.class "nb-out nb-out-error" ]
                 [ span [ HA.class "nb-prompt nb-prompt-err" ] [ text (promptLabel "Out" cell.count) ]
-                , div [ HA.class "nb-error" ] [ text message ]
+                , div [ HA.class "nb-error" ]
+                    [ text message
+                    , case config.errorFix cell of
+                        Just fix ->
+                            button
+                                [ HA.class "nb-fix"
+                                , HA.title "Replace it and re-run"
+                                , HE.onClick (config.onFix cell.id fix.fixed)
+                                ]
+                                [ Html.i [ HA.class "bi bi-magic" ] [], text (" " ++ fix.label) ]
+
+                        Nothing ->
+                            text ""
+                    ]
                 ]
 
         OutValue value ->
@@ -315,13 +382,166 @@ renderOutput config cell value =
     case config.chartOf cell.id of
         Just kind ->
             if Chart.chartable value then
-                div [ HA.class "nb-chart-box" ] [ Chart.view kind value ]
+                div [ HA.class "nb-chart-box" ] [ Chart.view kind (config.colOf cell.id) value ]
 
             else
                 valueHtml value
 
         Nothing ->
-            valueHtml value
+            if Value.isTable value then
+                interactiveTable config cell value
+
+            else
+                valueHtml value
+
+
+{-| The top-level table output, with sortable column headers, a row filter and a row cap — the
+notebook's interactive data grid. Nested tables (inside a cell) stay static. -}
+interactiveTable : Config msg -> Cell -> Value -> Html msg
+interactiveTable config cell value =
+    let
+        cols =
+            Value.tableColumns value
+
+        filter =
+            config.tableFilter cell.id
+
+        filtered =
+            if String.trim filter == "" then
+                itemsOf value
+
+            else
+                List.filter (rowMatches (String.toLower filter)) (itemsOf value)
+
+        sorted =
+            case config.tableSort cell.id of
+                Just ( col, desc ) ->
+                    sortRows col desc filtered
+
+                Nothing ->
+                    filtered
+
+        total =
+            List.length sorted
+
+        expanded =
+            config.tableExpanded cell.id
+
+        shown =
+            if expanded then
+                sorted
+
+            else
+                List.take tableCap sorted
+
+        sortMark col =
+            case config.tableSort cell.id of
+                Just ( c, desc ) ->
+                    if c == col then
+                        if desc then
+                            " ▾"
+
+                        else
+                            " ▴"
+
+                    else
+                        ""
+
+                _ ->
+                    ""
+
+        header =
+            thead []
+                [ tr []
+                    (List.map
+                        (\c -> th [ HA.class "nb-th-sort", HA.title "Sort by this column", HE.onClick (config.onSort cell.id c) ] [ text (c ++ sortMark c) ])
+                        cols
+                    )
+                ]
+    in
+    div [ HA.class "nb-table-x" ]
+        [ div [ HA.class "nb-table-controls" ]
+            [ input
+                [ HA.class "nb-table-filter"
+                , HA.placeholder "Filter rows…"
+                , HA.value filter
+                , HA.attribute "spellcheck" "false"
+                , HE.onInput (config.onFilter cell.id)
+                ]
+                []
+            , span [ HA.class "nb-table-count" ] [ text (countLabel (List.length shown) total) ]
+            ]
+        , wrapTable [ header, tbody [] (List.map (tableRow cols) shown) ]
+        , if total > tableCap then
+            button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
+                [ text
+                    (if expanded then
+                        "Show fewer"
+
+                     else
+                        "Show all " ++ String.fromInt total ++ " rows"
+                    )
+                ]
+
+          else
+            text ""
+        ]
+
+
+tableCap : Int
+tableCap =
+    20
+
+
+rowMatches : String -> Value -> Bool
+rowMatches needle row =
+    case row of
+        VRecord fields ->
+            List.any (\( _, v ) -> String.contains needle (String.toLower (Value.inlineValue v))) fields
+
+        _ ->
+            False
+
+
+sortRows : String -> Bool -> List Value -> List Value
+sortRows col desc rows =
+    let
+        ascending =
+            List.sortWith (compareField col) rows
+    in
+    if desc then
+        List.reverse ascending
+
+    else
+        ascending
+
+
+compareField : String -> Value -> Value -> Order
+compareField col a b =
+    case ( Value.fieldOf col a, Value.fieldOf col b ) of
+        ( Just (VNum x), Just (VNum y) ) ->
+            compare x y
+
+        ( Just va, Just vb ) ->
+            compare (Value.inlineValue va) (Value.inlineValue vb)
+
+        ( Just _, Nothing ) ->
+            GT
+
+        ( Nothing, Just _ ) ->
+            LT
+
+        ( Nothing, Nothing ) ->
+            EQ
+
+
+countLabel : Int -> Int -> String
+countLabel shown total =
+    if shown == total then
+        String.fromInt total ++ " rows"
+
+    else
+        "showing " ++ String.fromInt shown ++ " of " ++ String.fromInt total
 
 
 chartToggle : Config msg -> Cell -> Value -> Html msg
@@ -350,11 +570,37 @@ chartToggle config cell value =
             (chip "Table" (current == Nothing) (config.onChart cell.id Nothing)
                 :: List.map
                     (\k -> chip (Chart.label k) (current == Just k) (config.onChart cell.id (Just k)))
-                    Chart.kinds
+                    (Chart.chartableKinds value)
+                ++ [ columnPicker config cell value current ]
             )
 
     else
         text ""
+
+
+{-| A picker for which numeric column a chart plots — shown only when a chart is active on a table
+that has more than one numeric column. -}
+columnPicker : Config msg -> Cell -> Value -> Maybe Chart.ChartKind -> Html msg
+columnPicker config cell value current =
+    let
+        cols =
+            Chart.numericColumns value
+    in
+    case current of
+        Just kind ->
+            if List.length cols >= 2 && kind /= Chart.MultiLine then
+                let
+                    selected =
+                        config.colOf cell.id |> Maybe.withDefault (Maybe.withDefault "" (Chart.defaultColumn value))
+                in
+                Html.select [ HA.class "nb-chart-col", HE.onInput (config.onCol cell.id) ]
+                    (List.map (\c -> Html.option [ HA.value c, HA.selected (c == selected) ] [ text c ]) cols)
+
+            else
+                text ""
+
+        Nothing ->
+            text ""
 
 
 promptLabel : String -> Maybe Int -> String
@@ -602,6 +848,31 @@ variableRow onPick ( name, value ) =
         [ span [ HA.class "nb-var-name" ] [ text name ]
         , span [ HA.class "nb-var-type" ] [ text (Value.typeName value) ]
         , span [ HA.class "nb-var-val" ] [ text (preview value) ]
+        ]
+
+
+{-| A panel summarising the cells currently in error (their `In [n]` and the first line of the
+message). Clicking one re-runs that cell. Hidden when there are no errors. -}
+errorsPanel : (Int -> msg) -> List ( Int, Int, String ) -> Html msg
+errorsPanel onRun errors =
+    if List.isEmpty errors then
+        text ""
+
+    else
+        div [ HA.class "nb-errors" ]
+            (h3 [ HA.class "nb-errors-title" ]
+                [ Html.i [ HA.class "bi bi-exclamation-triangle" ] []
+                , text (" " ++ String.fromInt (List.length errors) ++ " in error")
+                ]
+                :: List.map (errorRow onRun) errors
+            )
+
+
+errorRow : (Int -> msg) -> ( Int, Int, String ) -> Html msg
+errorRow onRun ( id, count, message ) =
+    button [ HA.class "nb-error-row", HA.title "Re-run this cell", HE.onClick (onRun id) ]
+        [ span [ HA.class "nb-error-prompt" ] [ text (promptLabel "In" (Just count)) ]
+        , span [ HA.class "nb-error-msg" ] [ text (firstLine message) ]
         ]
 
 
