@@ -79,11 +79,15 @@ jobs:
             src/Main.elm --project=elm.json -o public/index.html --no-check
           # The compiler owns the output <head>; add a viewport meta and inline src/notebook.css
           # as a <style> so the page stays a single self-contained file (idempotent on re-runs).
-          CSSFILE=src/notebook.css perl -0777 -pi -e '
+          TITLE=elm-notebook SITECSS=assets/site.css CSSFILE=src/notebook.css perl -0777 -pi -e '
             s#<meta charset="utf-8">#<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">#;
+            s#<title>.*?</title>#"<title>".$ENV{TITLE}."</title>"#e;
             s#</head>#<link rel="stylesheet" href="bootstrap-icons-1.11.3.css"></head>#;
+            open(my $s, "<", $ENV{SITECSS}) or die "no site.css: $!";
+            local $/; my $scss = <$s>; close($s);
+            s#</head>#"<style id=\"wsite-css\">".$scss."</style></head>"#e;
             open(my $f, "<", $ENV{CSSFILE}) or die "no notebook.css: $!";
-            local $/; my $css = <$f>; close($f);
+            my $css = <$f>; close($f);
             s#</head>#"<style id=\"nb-app-css\">".$css."</style></head>"#e;
           ' public/index.html
           # Bootstrap Icons are vendored (no CDN); ship the versioned css + woff2 alongside the page.

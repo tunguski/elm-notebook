@@ -1,303 +1,53 @@
 module Main exposing (main)
 
-{-| The elm-notebook site.
+{-| The elm-notebook site — a [`Workspace.Site`](Workspace-Site).
 
-Two views, reflected in the URL hash so a page is safe to reload, links are shareable, and the
-browser Back/Forward buttons work:
+The landing (`#`) is the standalone notebook playground (the original single-notebook experience:
+guided lessons, a live notebook, suggestions), with a "Copy to workspace" button that lifts the
+current playground into a saved workspace document. The workspace (`#workspace`, `#<uuid>`) manages
+many saved notebooks — naming, search, copy, sharing, comments, import, SQL and export — over the
+[`Notebook.Workspace`](Notebook-Workspace) document.
 
-  - **Examples** (`#`) — a standalone notebook playground (the original single-notebook experience:
-    guided lessons, a live notebook, suggestions), with nothing saved. The hero links into the
-    workspace.
-  - **Workspace** (`#workspace`, and `#<uuid>` per document) — many saved notebooks with naming,
-    search, copy, sharing/permissions, comments, import, SQL and export, from the reusable
-    [`Workspace`](Workspace) component over the [`Notebook.Workspace`](Notebook-Workspace) document.
-
-There is no top navbar: the workspace is reached from the hero link, and the browser's Back button
-returns to the examples (the app polls the URL hash, since `Browser.element` has no hash-change
-subscription and `Browser.application` would intercept the data-URI export download links).
+All the routing, navbar, hero and footer chrome lives in [`Workspace.Site`](Workspace-Site); this
+module only declares what is specific to elm-notebook.
 
 -}
 
-import Browser
-import Browser.Navigation as Nav
-import Html exposing (Html, a, button, div, footer, h1, header, img, nav, p, span, text)
+import Html exposing (text)
 import Html.Attributes as HA
-import Html.Events as HE
 import Notebook.Workspace as NB exposing (NbDoc, NbMsg)
-import Time
-import Workspace
-import Workspace.Backend exposing (Backend, Context)
-import Workspace.Browser
+import Workspace.Site
 
 
-main : Program () Model Msg
+main : Program () (Workspace.Site.Model NbDoc NbDoc) (Workspace.Site.Msg NbMsg NbMsg)
 main =
-    Browser.element
-        { init = init
-        , update = update
-        , view = view
-        , subscriptions = subscriptions
+    Workspace.Site.program
+        { title = "elm-notebook"
+        , namespace = "elm-notebook"
+        , logo = "logo.svg"
+        , eyebrow = "elm · data exploration"
+        , lead =
+            [ text "A Jupyter-style notebook that runs real "
+            , Html.a [ HA.href "https://elm-lang.org" ] [ text "Elm" ]
+            , text " in your browser — edit a cell, press Run, and build an analysis step by step, with "
+            , text "suggestions for where to go next. Open the "
+            , Workspace.Site.workspaceLink [ text "Workspace" ]
+            , text " to save, share and organise many notebooks."
+            ]
+        , repoUrl = "https://github.com/tunguski/elm-notebook"
+        , workspace = NB.config
+        , context = { user = "me", groups = [] }
+        , landing =
+            { init = NB.examples
+            , update = \msg doc -> ( NB.updateNb msg doc, Cmd.none )
+            , subscriptions = \_ -> Sub.none
+            , view = NB.examplesView
+            , copyToWorkspace =
+                \msg doc ->
+                    if NB.isCopyToWorkspace msg then
+                        Just doc
+
+                    else
+                        Nothing
+            }
         }
-
-
-
--- WIRING ---------------------------------------------------------------------
-
-
-ctx : Context
-ctx =
-    { user = "me", groups = [] }
-
-
-backend : Backend (Workspace.Msg NbMsg)
-backend =
-    Workspace.Browser.backend "elm-notebook"
-
-
-
--- MODEL ----------------------------------------------------------------------
-
-
-type Route
-    = Examples
-    | Wsp
-
-
-type alias Model =
-    { route : Route
-    , ws : Workspace.Model NbDoc
-    , demo : NbDoc
-    , hash : String
-    }
-
-
-type Msg
-    = WsMsg (Workspace.Msg NbMsg)
-    | DemoMsg NbMsg
-    | SetRoute Route
-    | GotHash String
-    | Poll
-
-
-init : () -> ( Model, Cmd Msg )
-init _ =
-    let
-        ( ws, wsCmd ) =
-            Workspace.init backend
-    in
-    ( { route = Examples, ws = ws, demo = NB.examples, hash = "" }
-    , Cmd.batch [ Cmd.map WsMsg wsCmd, Nav.getHash GotHash ]
-    )
-
-
-
--- UPDATE ---------------------------------------------------------------------
-
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        GotHash raw ->
-            -- the URL changed (initial load, or Back/Forward) — route from it, don't write it back.
-            -- Ignore polls while a document id is being minted (the URL is mid-transition then).
-            if pendingCreate model then
-                ( model, Cmd.none )
-
-            else
-                let
-                    h =
-                        normalizeHash raw
-                in
-                if h == toHash model then
-                    ( { model | hash = h }, Cmd.none )
-
-                else
-                    applyHash h { model | hash = h }
-
-        Poll ->
-            ( model, Nav.getHash GotHash )
-
-        _ ->
-            let
-                ( next, cmd ) =
-                    updateInner msg model
-
-                desired =
-                    toHash next
-            in
-            -- don't write the hash mid-create (open is not set until the UUID arrives), else the URL
-            -- would flicker to #workspace and a poll could read that stale value
-            if pendingCreate next || desired == next.hash then
-                ( next, cmd )
-
-            else
-                ( { next | hash = desired }, Cmd.batch [ cmd, Nav.setHash desired ] )
-
-
-{-| Is a new-document id currently being minted (so the URL should be left alone for a moment)? -}
-pendingCreate : Model -> Bool
-pendingCreate model =
-    case model.ws.pending of
-        Just _ ->
-            True
-
-        Nothing ->
-            False
-
-
-updateInner : Msg -> Model -> ( Model, Cmd Msg )
-updateInner msg model =
-    case msg of
-        WsMsg m ->
-            let
-                ( ws, cmd ) =
-                    Workspace.update NB.config backend ctx m model.ws
-            in
-            ( { model | ws = ws }, Cmd.map WsMsg cmd )
-
-        DemoMsg m ->
-            if NB.isCopyToWorkspace m then
-                -- copy the standalone playground into the workspace and open it there
-                let
-                    ( ws, cmd ) =
-                        Workspace.createFrom model.demo model.ws
-                in
-                ( { model | ws = ws, route = Wsp }, Cmd.map WsMsg cmd )
-
-            else
-                ( { model | demo = NB.updateNb m model.demo }, Cmd.none )
-
-        SetRoute route ->
-            ( { model | route = route }, Cmd.none )
-
-        _ ->
-            ( model, Cmd.none )
-
-
-subscriptions : Model -> Sub Msg
-subscriptions model =
-    Sub.batch
-        [ Sub.map WsMsg (Workspace.subscriptions model.ws)
-
-        -- poll the URL hash so the browser Back/Forward buttons change the view
-        , Time.every 400 (always Poll)
-        ]
-
-
-
--- ROUTING --------------------------------------------------------------------
-
-
-{-| The hash this model should show. -}
-toHash : Model -> String
-toHash model =
-    case model.route of
-        Examples ->
-            ""
-
-        Wsp ->
-            case model.ws.open of
-                Just stored ->
-                    stored.meta.id
-
-                Nothing ->
-                    "workspace"
-
-
-{-| Route from a hash read off the URL (already normalised); model.hash is assumed up to date. -}
-applyHash : String -> Model -> ( Model, Cmd Msg )
-applyHash h model =
-    if h == "" then
-        ( { model | route = Examples }, Cmd.none )
-
-    else if h == "workspace" then
-        ( { model | route = Wsp }, Cmd.none )
-
-    else
-        -- any other hash is a document id (a uuid)
-        ( { model | route = Wsp }
-        , Cmd.map WsMsg (Workspace.openDocument backend h)
-        )
-
-
-normalizeHash : String -> String
-normalizeHash raw =
-    raw |> dropPrefixChar '#' |> dropPrefixChar '/'
-
-
-dropPrefixChar : Char -> String -> String
-dropPrefixChar c s =
-    if String.startsWith (String.fromChar c) s then
-        String.dropLeft 1 s
-
-    else
-        s
-
-
-
--- VIEW -----------------------------------------------------------------------
-
-
-view : Model -> Html Msg
-view model =
-    div [ HA.class "nb-app" ]
-        [ case model.route of
-            Examples ->
-                div []
-                    [ pageHeader
-                    , Html.map DemoMsg (NB.examplesView model.demo)
-                    ]
-
-            Wsp ->
-                div []
-                    [ wsNav
-                    , Html.map WsMsg (Workspace.view NB.config backend ctx model.ws)
-                    ]
-        , pageFooter
-        ]
-
-
-wsNav : Html Msg
-wsNav =
-    nav [ HA.class "nb-wsnav" ]
-        [ button [ HA.class "nb-brand", HE.onClick (SetRoute Examples), HA.title "Back to examples" ]
-            [ img [ HA.class "nb-logo", HA.src "logo.svg", HA.alt "" ] []
-            , span [ HA.class "nb-brand-name" ] [ text "elm-notebook" ]
-            ]
-        ]
-
-
-pageHeader : Html Msg
-pageHeader =
-    header [ HA.class "nb-hero" ]
-        [ div [ HA.class "nb-hero-inner" ]
-            [ span [ HA.class "nb-eyebrow" ] [ text "elm · data exploration" ]
-            , h1 [] [ text "elm-notebook" ]
-            , p [ HA.class "nb-lead" ]
-                [ text "A Jupyter-style notebook that runs real "
-                , a [ HA.href "https://elm-lang.org" ] [ text "Elm" ]
-                , text " in your browser. Edit a cell, press Run, and build an analysis step by step — "
-                , text "the app suggests where to go next. Open the "
-                , button [ HA.class "nb-inline-link", HE.onClick (SetRoute Wsp) ] [ text "Workspace" ]
-                , text " to save, share and organise many notebooks."
-                ]
-            ]
-        ]
-
-
-pageFooter : Html Msg
-pageFooter =
-    footer [ HA.class "nb-foot" ]
-        [ div []
-            [ text "elm-notebook — runs real Elm via the "
-            , a [ HA.href "https://github.com/tunguski/elm-lang" ] [ text "elm-lang" ]
-            , text " interpreter, in a reusable "
-            , a [ HA.href "https://github.com/tunguski/elm-workspace" ] [ text "elm-workspace" ]
-            , text "."
-            ]
-        , div [ HA.class "nb-foot-links" ]
-            [ a [ HA.href "tests.html" ] [ text "Test report" ]
-            , a [ HA.href "https://github.com/tunguski/elm-notebook" ] [ text "GitHub" ]
-            , a [ HA.href "https://tunguski.github.io/" ] [ text "More projects" ]
-            ]
-        ]
