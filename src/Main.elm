@@ -20,7 +20,7 @@ subscription and `Browser.application` would intercept the data-URI export downl
 
 import Browser
 import Browser.Navigation as Nav
-import Html exposing (Html, a, button, div, footer, h1, header, p, span, text)
+import Html exposing (Html, a, button, div, footer, h1, header, img, nav, p, span, text)
 import Html.Attributes as HA
 import Html.Events as HE
 import Notebook.Workspace as NB exposing (NbDoc, NbMsg)
@@ -98,16 +98,21 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         GotHash raw ->
-            -- the URL changed (initial load, or Back/Forward) — route from it, don't write it back
-            let
-                h =
-                    normalizeHash raw
-            in
-            if h == model.hash then
+            -- the URL changed (initial load, or Back/Forward) — route from it, don't write it back.
+            -- Ignore polls while a document id is being minted (the URL is mid-transition then).
+            if pendingCreate model then
                 ( model, Cmd.none )
 
             else
-                applyHash h { model | hash = h }
+                let
+                    h =
+                        normalizeHash raw
+                in
+                if h == toHash model then
+                    ( { model | hash = h }, Cmd.none )
+
+                else
+                    applyHash h { model | hash = h }
 
         Poll ->
             ( model, Nav.getHash GotHash )
@@ -120,11 +125,24 @@ update msg model =
                 desired =
                     toHash next
             in
-            if desired == next.hash then
+            -- don't write the hash mid-create (open is not set until the UUID arrives), else the URL
+            -- would flicker to #workspace and a poll could read that stale value
+            if pendingCreate next || desired == next.hash then
                 ( next, cmd )
 
             else
                 ( { next | hash = desired }, Cmd.batch [ cmd, Nav.setHash desired ] )
+
+
+{-| Is a new-document id currently being minted (so the URL should be left alone for a moment)? -}
+pendingCreate : Model -> Bool
+pendingCreate model =
+    case model.ws.pending of
+        Just _ ->
+            True
+
+        Nothing ->
+            False
 
 
 updateInner : Msg -> Model -> ( Model, Cmd Msg )
@@ -138,7 +156,16 @@ updateInner msg model =
             ( { model | ws = ws }, Cmd.map WsMsg cmd )
 
         DemoMsg m ->
-            ( { model | demo = NB.updateNb m model.demo }, Cmd.none )
+            if NB.isCopyToWorkspace m then
+                -- copy the standalone playground into the workspace and open it there
+                let
+                    ( ws, cmd ) =
+                        Workspace.createFrom model.demo model.ws
+                in
+                ( { model | ws = ws, route = Wsp }, Cmd.map WsMsg cmd )
+
+            else
+                ( { model | demo = NB.updateNb m model.demo }, Cmd.none )
 
         SetRoute route ->
             ( { model | route = route }, Cmd.none )
@@ -222,8 +249,21 @@ view model =
                     ]
 
             Wsp ->
-                Html.map WsMsg (Workspace.view NB.config backend ctx model.ws)
+                div []
+                    [ wsNav
+                    , Html.map WsMsg (Workspace.view NB.config backend ctx model.ws)
+                    ]
         , pageFooter
+        ]
+
+
+wsNav : Html Msg
+wsNav =
+    nav [ HA.class "nb-wsnav" ]
+        [ button [ HA.class "nb-brand", HE.onClick (SetRoute Examples), HA.title "Back to examples" ]
+            [ img [ HA.class "nb-logo", HA.src "logo.svg", HA.alt "" ] []
+            , span [ HA.class "nb-brand-name" ] [ text "elm-notebook" ]
+            ]
         ]
 
 

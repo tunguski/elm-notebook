@@ -1,4 +1,4 @@
-module Notebook.Workspace exposing (NbDoc, NbMsg, config, examples, examplesView, updateNb)
+module Notebook.Workspace exposing (NbDoc, NbMsg, config, examples, examplesView, updateNb, isCopyToWorkspace)
 
 {-| The notebook seen as a **workspace document**: this module adapts the notebook engine
 ([`Notebook.Doc`](Notebook-Doc) / [`Cell`](Notebook-Cell) / [`Kernel`](Notebook-Kernel) /
@@ -63,6 +63,7 @@ type NbMsg
     | SetInputValue Int String
     | SetInputName Int String
     | SetInputControl Int String
+    | CopyToWorkspaceRequested
 
 
 
@@ -76,7 +77,7 @@ config =
     , empty = empty
     , kind = "notebook"
     , activate = \nb -> { nb | doc = Doc.runAll nb.doc }
-    , viewDoc = viewNb
+    , viewDoc = viewNb False
     , updateDoc = updateNb
     , elementsOf = elementsOf
     , toTable = \nb -> Doc.lastValue nb.doc |> Maybe.andThen Export.valueToTable
@@ -113,10 +114,11 @@ examples =
     }
 
 
-{-| Render a notebook as a standalone playground (no comments, no workspace chrome). -}
+{-| Render a notebook as a standalone playground (no comments, no workspace chrome), with a
+"Copy to workspace" action in its toolbars. -}
 examplesView : NbDoc -> Html NbMsg
 examplesView nb =
-    viewNb { comments = Dict.empty, commentsVisible = False, commentCount = always 0 } nb
+    viewNb True { comments = Dict.empty, commentsVisible = False, commentCount = always 0 } nb
 
 
 elementsOf : NbDoc -> List ( String, String )
@@ -224,6 +226,17 @@ updateNb msg nb =
         SetInputControl id controlName ->
             { nb | doc = Doc.setInputControl id (parseControl controlName) nb.doc |> Doc.runAll }
 
+        CopyToWorkspaceRequested ->
+            -- handled by the host (see Main), which copies this notebook into the workspace
+            nb
+
+
+{-| Did this message ask to copy the standalone playground into the workspace? The host intercepts
+it (the adapter can't reach the workspace state). -}
+isCopyToWorkspace : NbMsg -> Bool
+isCopyToWorkspace msg =
+    msg == CopyToWorkspaceRequested
+
 
 defaultInput : Cell.InputSpec
 defaultInput =
@@ -250,15 +263,15 @@ parseControl name =
 -- VIEW -----------------------------------------------------------------------
 
 
-viewNb : Workspace.EditorEnv -> NbDoc -> Html NbMsg
-viewNb env nb =
+viewNb : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
+viewNb showCopy env nb =
     div [ HA.class "nb-workspace" ]
         [ lessonBar nb.lesson
-        , toolbar
+        , toolbar showCopy
         , section [ HA.class "nb-main" ]
             [ div [ HA.class "nb-notebook" ]
                 [ NbView.notebook (viewConfig env nb) nb.doc
-                , toolbar
+                , toolbar showCopy
                 ]
             , div [ HA.class "nb-sidebar" ]
                 [ NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
@@ -299,14 +312,20 @@ exportCell cell =
             text ""
 
 
-toolbar : Html NbMsg
-toolbar =
+toolbar : Bool -> Html NbMsg
+toolbar showCopy =
     section [ HA.class "nb-actions" ]
         [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
         , button [ HA.class "nb-action", HE.onClick AddCode ] [ text "+ Code cell" ]
         , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text "+ Text cell" ]
         , button [ HA.class "nb-action", HE.onClick AddInput ] [ text "+ Input" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
+        , if showCopy then
+            button [ HA.class "nb-action nb-action-copy", HE.onClick CopyToWorkspaceRequested ]
+                [ Html.i [ HA.class "bi bi-folder-plus" ] [], text " Copy to workspace" ]
+
+          else
+            text ""
         ]
 
 

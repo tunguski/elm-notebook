@@ -1,7 +1,7 @@
 module Workspace exposing
     ( Model, Msg, Config, DocCodec, EditorEnv
     , init, update, view, subscriptions
-    , openDocument
+    , openDocument, createFrom
     )
 
 {-| A reusable **workspace** around a document: create, name, open, search, copy, delete and set
@@ -131,6 +131,7 @@ type alias Model doc =
     , urlFormat : String
     , sqlDraft : String
     , notice : Maybe String
+    , pending : Maybe doc
     }
 
 
@@ -150,6 +151,7 @@ init backend =
       , urlFormat = "json"
       , sqlDraft = ""
       , notice = Nothing
+      , pending = Nothing
       }
     , backend.listMetas GotMetas
     )
@@ -159,6 +161,14 @@ init backend =
 openDocument : Backend (Msg docMsg) -> Id -> Cmd (Msg docMsg)
 openDocument backend id =
     backend.load id GotDoc
+
+
+{-| Create and open a **new document from an existing value** — e.g. a host copying a standalone
+playground into the workspace. Mints a fresh UUID, then (via the returned `Cmd`) adds and opens it.
+Call it directly and merge the returned model/`Cmd` into your own update. -}
+createFrom : doc -> Model doc -> ( Model doc, Cmd (Msg docMsg) )
+createFrom doc model =
+    ( { model | pending = Just doc }, Random.generate CreatedStaged uuidGenerator )
 
 
 
@@ -173,6 +183,7 @@ type Msg docMsg
     | GotForDuplicate Id (Result String String)
     | New
     | CreateFresh Id
+    | CreatedStaged Id
     | StartDuplicate Id Id
     | Open Id
     | Close
@@ -264,19 +275,15 @@ update config backend ctx msg model =
             ( model, Random.generate CreateFresh uuidGenerator )
 
         CreateFresh id ->
-            let
-                meta =
-                    Types.newMeta id "" config.kind ctx.user
+            openNew config backend ctx id config.empty model
 
-                stored =
-                    { meta = meta, doc = config.empty, comments = Dict.empty }
+        CreatedStaged id ->
+            case model.pending of
+                Just doc ->
+                    openNew config backend ctx id doc { model | pending = Nothing }
 
-                metas =
-                    model.metas ++ [ meta ]
-            in
-            ( { model | metas = metas, open = Just stored, page = Editing, dialog = NoDialog, notice = Nothing }
-            , Cmd.batch [ saveDoc config backend stored, backend.saveIndex metas ]
-            )
+                Nothing ->
+                    ( model, Cmd.none )
 
         StartDuplicate sourceId newId ->
             ( model, backend.load sourceId (GotForDuplicate newId) )
@@ -499,6 +506,24 @@ update config backend ctx msg model =
 
 
 -- UPDATE HELPERS -------------------------------------------------------------
+
+
+{-| Add a new document (with id `id` and body `doc`) to the workspace and open it. -}
+openNew : Config doc docMsg -> Backend (Msg docMsg) -> Context -> Id -> doc -> Model doc -> ( Model doc, Cmd (Msg docMsg) )
+openNew config backend ctx id doc model =
+    let
+        meta =
+            Types.newMeta id "" config.kind ctx.user
+
+        stored =
+            { meta = meta, doc = doc, comments = Dict.empty }
+
+        metas =
+            model.metas ++ [ meta ]
+    in
+    ( { model | metas = metas, open = Just stored, page = Editing, dialog = NoDialog, notice = Nothing }
+    , Cmd.batch [ saveDoc config backend stored, backend.saveIndex metas ]
+    )
 
 
 withOpen : Model doc -> (Stored doc -> ( Model doc, Cmd (Msg docMsg) )) -> ( Model doc, Cmd (Msg docMsg) )

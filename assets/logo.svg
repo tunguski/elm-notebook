@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="elm-notebook logo">
+  <defs>
+    <linearGradient id="g" x1="3" y1="5" x2="29" y2="28" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5b6ef5"/>
+      <stop offset="1" stop-color="#9b54e6"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 8.6C12.7 6.1 8.6 5.7 5.2 7V23.7C8.6 22.4 12.7 22.8 16 25.3" stroke="url(#g)" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16 8.6C19.3 6.1 23.4 5.7 26.8 7V23.7C23.4 22.4 19.3 22.8 16 25.3" stroke="url(#g)" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16 8.6V25.3" stroke="url(#g)" stroke-width="2.3" stroke-linecap="round"/>
+</svg>

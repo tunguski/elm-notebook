@@ -28,7 +28,7 @@ CSSFILE="$P/src/notebook.css" perl -0pi -e '
     s#<meta charset="utf-8">#<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">#;
   }
   if (index($_, q{bootstrap-icons}) < 0) {
-    s#</head>#<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons\@1.11.3/font/bootstrap-icons.css"></head>#;
+    s#</head>#<link rel="stylesheet" href="bootstrap-icons-1.11.3.css"></head>#;
   }
   if (index($_, q{id="nb-app-css"}) < 0) {
     open(my $f, "<", $ENV{CSSFILE}) or die "no notebook.css: $!";
@@ -36,4 +36,7 @@ CSSFILE="$P/src/notebook.css" perl -0pi -e '
     s#</head>#"<style id=\"nb-app-css\">".$css."</style></head>"#e;
   }
 ' "$HTML"
+
+# Bootstrap Icons are vendored (no CDN); ship the versioned css + woff2 next to the page.
+cp "$P/assets/bootstrap-icons-1.11.3.css" "$P/assets/bootstrap-icons-1.11.3.woff2" "$P/assets/logo.svg" "$P/$OUT/"
 echo "Done -> $OUT/elm-notebook.html"
