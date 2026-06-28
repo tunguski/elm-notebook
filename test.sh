@@ -23,4 +23,4 @@ $ELM test "$P/test/NotebookTest.elm" \
   "$P/src/Notebook/Kernel.elm" "$P/src/Notebook/Doc.elm" "$P/src/Notebook/Suggest.elm" \
   "$P/src/Notebook/Chart.elm" "$P/src/Notebook/Csv.elm" "$P/src/Notebook/Serialize.elm" \
   "$P/vendor/Workspace/Types.elm" "$P/vendor/Workspace/Table.elm" "$P/src/Notebook/Export.elm" \
-  "$P/src/Notebook/Deps.elm" "$P/src/Notebook/Hint.elm" "$P/src/Notebook/Profile.elm" "$P/src/Notebook/Import.elm" "$P/src/Notebook/Complete.elm"
+  "$P/src/Notebook/Deps.elm" "$P/src/Notebook/Hint.elm" "$P/src/Notebook/Profile.elm" "$P/src/Notebook/Import.elm" "$P/src/Notebook/Complete.elm" "$P/src/Notebook/Pivot.elm" "$P/src/Notebook/Correlation.elm" "$P/src/Notebook/Outline.elm" "$P/src/Notebook/Reference.elm"

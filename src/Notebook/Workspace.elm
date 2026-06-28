@@ -21,6 +21,7 @@ import Html exposing (Html, button, div, section, span, text)
 import Html.Attributes as HA
 import Html.Events as HE
 import Json.Decode as D
+import Lang
 import Notebook.Chart as Chart
 import Notebook.Csv as Csv
 import Notebook.Deps as Deps
@@ -30,6 +31,9 @@ import Notebook.Export as Export
 import Notebook.Hint as Hint
 import Notebook.Import as Import
 import Notebook.Kernel as Kernel
+import Notebook.Outline as Outline
+import Notebook.Pivot as Pivot
+import Notebook.Reference as Reference
 import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest exposing (Lesson, Suggestion)
 import Notebook.Value as Value
@@ -49,11 +53,16 @@ type alias NbDoc =
     , cols : Dict Int String
     , tables : Dict Int TableState
     , profiles : Set Int
+    , pivots : Dict Int Pivot.Spec
+    , corrs : Set Int
     , paste : Maybe ( String, String )
+    , find : Maybe ( String, String )
+    , ref : Maybe String
     , report : Bool
     , past : List Doc
     , future : List Doc
     , active : Maybe Int
+    , folded : Set Int
     , lesson : String
     , stale : Set Int
     }
@@ -73,6 +82,78 @@ defaultTable =
 tableOf : Int -> NbDoc -> TableState
 tableOf id nb =
     Dict.get id nb.tables |> Maybe.withDefault defaultTable
+
+
+{-| Turn off every alternate output view (chart / profile / pivot / correlation) for a cell, so the
+output toggle behaves as one mutually-exclusive picker. -}
+clearModes : Int -> NbDoc -> NbDoc
+clearModes id nb =
+    { nb
+        | charts = Dict.remove id nb.charts
+        , profiles = Set.remove id nb.profiles
+        , pivots = Dict.remove id nb.pivots
+        , corrs = Set.remove id nb.corrs
+    }
+
+
+{-| The value a cell currently shows, if it produced one. -}
+cellValue : Int -> NbDoc -> Maybe Lang.Value
+cellValue id nb =
+    Doc.find id nb.doc
+        |> Maybe.andThen
+            (\c ->
+                case c.output of
+                    OutValue v ->
+                        Just v
+
+                    _ ->
+                        Nothing
+            )
+
+
+{-| The ids of the cells strictly before the given cell (for "run above"). -}
+cellIdsBefore : Int -> Doc -> Set Int
+cellIdsBefore id doc =
+    List.map .id doc.cells
+        |> List.foldl
+            (\i ( acc, stop ) ->
+                if stop || i == id then
+                    ( acc, True )
+
+                else
+                    ( i :: acc, False )
+            )
+            ( [], False )
+        |> Tuple.first
+        |> Set.fromList
+
+
+{-| The ids of the given cell and every cell after it (for "run from here down"). -}
+cellIdsFrom : Int -> Doc -> Set Int
+cellIdsFrom id doc =
+    List.map .id doc.cells
+        |> List.foldl
+            (\i ( acc, started ) ->
+                if started || i == id then
+                    ( i :: acc, True )
+
+                else
+                    ( acc, False )
+            )
+            ( [], False )
+        |> Tuple.first
+        |> Set.fromList
+
+
+{-| A starting pivot spec derived from a cell's table value (or an empty one). -}
+pivotSpecFor : Int -> NbDoc -> Pivot.Spec
+pivotSpecFor id nb =
+    case cellValue id nb of
+        Just value ->
+            Pivot.defaultSpec value
+
+        Nothing ->
+            { row = "", column = "", value = "", agg = Pivot.Sum }
 
 
 {-| The notebook editor's messages (everything the old single-notebook `Main` handled). -}
@@ -98,6 +179,12 @@ type NbMsg
     | FilterRows Int String
     | ExpandTable Int Bool
     | SetProfile Int Bool
+    | SetPivot Int Bool
+    | SetPivotRow Int String
+    | SetPivotColumn Int String
+    | SetPivotValue Int String
+    | SetPivotAgg Int String
+    | SetCorr Int Bool
     | OpenImport
     | SetImportName String
     | SetImportText String
@@ -106,6 +193,21 @@ type NbMsg
     | ToggleReport
     | Undo
     | Redo
+    | OpenFind
+    | SetFindQuery String
+    | SetFindReplace String
+    | ReplaceAll
+    | CloseFind
+    | OpenRef
+    | SetRefQuery String
+    | InsertSnippet String
+    | CloseRef
+    | ToggleFold Int
+    | DuplicateCell Int
+    | InsertAbove Int
+    | InsertBelow Int
+    | RunAbove Int
+    | RunBelow Int
     | InsertName String
     | SetInputValue Int String
     | SetInputName Int String
@@ -134,7 +236,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, paste = Nothing, report = False, past = [], future = [], active = Nothing, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, paste = Nothing, find = Nothing, ref = Nothing, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -149,11 +251,16 @@ empty =
     , cols = Dict.empty
     , tables = Dict.empty
     , profiles = Set.empty
+    , pivots = Dict.empty
+    , corrs = Set.empty
     , paste = Nothing
+    , find = Nothing
+    , ref = Nothing
     , report = False
     , past = []
     , future = []
     , active = Nothing
+    , folded = Set.empty
     , lesson = ""
     , stale = Set.empty
     }
@@ -169,11 +276,16 @@ examples =
     , cols = Dict.empty
     , tables = Dict.empty
     , profiles = Set.empty
+    , pivots = Dict.empty
+    , corrs = Set.empty
     , paste = Nothing
+    , find = Nothing
+    , ref = Nothing
     , report = False
     , past = []
     , future = []
     , active = Nothing
+    , folded = Set.empty
     , lesson = "starter"
     , stale = Set.empty
     }
@@ -266,6 +378,21 @@ undoable msg =
             True
 
         DoImport ->
+            True
+
+        ReplaceAll ->
+            True
+
+        InsertSnippet _ ->
+            True
+
+        DuplicateCell _ ->
+            True
+
+        InsertAbove _ ->
+            True
+
+        InsertBelow _ ->
             True
 
         _ ->
@@ -380,31 +507,64 @@ step msg nb =
             { nb | doc = Doc.fromSpec lesson.cells |> Doc.runAll, lesson = lesson.id, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, stale = Set.empty }
 
         SetChart id maybeKind ->
-            { nb
-                | charts =
-                    case maybeKind of
-                        Just kind ->
-                            Dict.insert id kind nb.charts
+            let
+                c =
+                    clearModes id nb
+            in
+            case maybeKind of
+                Just kind ->
+                    { c | charts = Dict.insert id kind c.charts }
 
-                        Nothing ->
-                            Dict.remove id nb.charts
-
-                -- choosing Table or a chart turns off the profile view
-                , profiles = Set.remove id nb.profiles
-            }
+                Nothing ->
+                    c
 
         SetCol id colName ->
             { nb | cols = Dict.insert id colName nb.cols }
 
         SetProfile id flag ->
-            { nb
-                | profiles =
-                    if flag then
-                        Set.insert id nb.profiles
+            let
+                c =
+                    clearModes id nb
+            in
+            if flag then
+                { c | profiles = Set.insert id c.profiles }
 
-                    else
-                        Set.remove id nb.profiles
-            }
+            else
+                c
+
+        SetPivot id flag ->
+            let
+                c =
+                    clearModes id nb
+            in
+            if flag then
+                { c | pivots = Dict.insert id (pivotSpecFor id nb) c.pivots }
+
+            else
+                c
+
+        SetPivotRow id colName ->
+            { nb | pivots = Dict.update id (Maybe.map (Pivot.withRow colName)) nb.pivots }
+
+        SetPivotColumn id colName ->
+            { nb | pivots = Dict.update id (Maybe.map (Pivot.withColumn colName)) nb.pivots }
+
+        SetPivotValue id colName ->
+            { nb | pivots = Dict.update id (Maybe.map (Pivot.withValue colName)) nb.pivots }
+
+        SetPivotAgg id aggName ->
+            { nb | pivots = Dict.update id (Maybe.map (Pivot.withAgg (Pivot.aggFromString aggName))) nb.pivots }
+
+        SetCorr id flag ->
+            let
+                c =
+                    clearModes id nb
+            in
+            if flag then
+                { c | corrs = Set.insert id c.corrs }
+
+            else
+                c
 
         OpenImport ->
             { nb | paste = Just ( "data", "" ) }
@@ -420,6 +580,80 @@ step msg nb =
 
         ToggleReport ->
             { nb | report = not nb.report }
+
+        OpenFind ->
+            { nb | find = Just ( "", "" ) }
+
+        SetFindQuery q ->
+            { nb | find = Maybe.map (\( _, r ) -> ( q, r )) nb.find }
+
+        SetFindReplace r ->
+            { nb | find = Maybe.map (\( q, _ ) -> ( q, r )) nb.find }
+
+        CloseFind ->
+            { nb | find = Nothing }
+
+        OpenRef ->
+            { nb | ref = Just "" }
+
+        SetRefQuery q ->
+            { nb | ref = Just q }
+
+        CloseRef ->
+            { nb | ref = Nothing }
+
+        InsertSnippet snippet ->
+            { nb | doc = nb.doc |> Doc.append Code snippet |> Doc.runAll }
+
+        ToggleFold id ->
+            { nb
+                | folded =
+                    if Set.member id nb.folded then
+                        Set.remove id nb.folded
+
+                    else
+                        Set.insert id nb.folded
+            }
+
+        DuplicateCell id ->
+            { nb | doc = Doc.duplicate id nb.doc |> Doc.runAll }
+
+        InsertAbove id ->
+            { nb | doc = Doc.insertBefore id Code "" nb.doc }
+
+        InsertBelow id ->
+            { nb | doc = Doc.insertAfter id Code "" nb.doc }
+
+        RunAbove id ->
+            { nb | doc = Doc.runAffected (cellIdsBefore id nb.doc) nb.doc, stale = nb.stale }
+
+        RunBelow id ->
+            { nb | doc = Doc.runAffected (cellIdsFrom id nb.doc) nb.doc, stale = nb.stale }
+
+        ReplaceAll ->
+            case nb.find of
+                Just ( q, r ) ->
+                    if q == "" then
+                        nb
+
+                    else
+                        let
+                            doc2 =
+                                List.foldl
+                                    (\c d ->
+                                        if String.contains q c.source then
+                                            Doc.setSource c.id (String.replace q r c.source) d
+
+                                        else
+                                            d
+                                    )
+                                    nb.doc
+                                    nb.doc.cells
+                        in
+                        { nb | doc = Doc.runAll doc2, stale = Set.empty }
+
+                Nothing ->
+                    nb
 
         DoImport ->
             case nb.paste of
@@ -534,6 +768,8 @@ viewNb showCopy env nb =
           else
             lessonBar nb.lesson
         , toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
+        , findBar nb.find nb.doc
+        , refPanel nb.ref
         , pastePanel nb.paste
         , section [ HA.class "nb-main" ]
             [ div [ HA.class "nb-notebook" ]
@@ -550,6 +786,7 @@ viewNb showCopy env nb =
               else
                 div [ HA.class "nb-sidebar" ]
                     [ NbView.errorsPanel Run (errorList nb.doc)
+                    , NbView.outlinePanel (Outline.headings nb.doc)
                     , NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
                     , NbView.variablesPanel InsertName (Doc.variables nb.doc)
                     ]
@@ -589,9 +826,25 @@ viewConfig env nb =
     , evalInline = evalInline nb
     , isProfile = \id -> Set.member id nb.profiles
     , onProfile = SetProfile
+    , pivotOf = \id -> Dict.get id nb.pivots
+    , onPivot = SetPivot
+    , onPivotRow = SetPivotRow
+    , onPivotColumn = SetPivotColumn
+    , onPivotValue = SetPivotValue
+    , onPivotAgg = SetPivotAgg
+    , isCorr = \id -> Set.member id nb.corrs
+    , onCorr = SetCorr
     , report = nb.report
     , activeCell = nb.active
     , scopeNames = Kernel.names nb.doc.kernel
+    , findQuery = Maybe.map Tuple.first nb.find
+    , isFolded = \id -> Set.member id nb.folded
+    , onFold = ToggleFold
+    , onDuplicate = DuplicateCell
+    , onInsertAbove = InsertAbove
+    , onInsertBelow = InsertBelow
+    , onRunAbove = RunAbove
+    , onRunBelow = RunBelow
     }
 
 
@@ -725,6 +978,8 @@ toolbar showCopy staleCount report canUndo canRedo doc =
         , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text "+ Text cell" ]
         , button [ HA.class "nb-action", HE.onClick AddInput ] [ text "+ Input" ]
         , button [ HA.class "nb-action", HE.onClick OpenImport ] [ Html.i [ HA.class "bi bi-clipboard-data" ] [], text " Import data" ]
+        , button [ HA.class "nb-action", HE.onClick OpenFind ] [ Html.i [ HA.class "bi bi-search" ] [], text " Find" ]
+        , button [ HA.class "nb-action", HE.onClick OpenRef ] [ Html.i [ HA.class "bi bi-journal-code" ] [], text " Reference" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
         , span [ HA.class "nb-action-export" ] [ Export.notebookLinks doc ]
         , reportToggle report
@@ -736,6 +991,75 @@ toolbar showCopy staleCount report canUndo canRedo doc =
             text ""
          ]
         )
+
+
+{-| The function reference: a search box over the prelude + stdlib catalog; clicking an entry appends
+a code cell with its snippet. -}
+refPanel : Maybe String -> Html NbMsg
+refPanel ref =
+    case ref of
+        Nothing ->
+            text ""
+
+        Just query ->
+            section [ HA.class "nb-ref" ]
+                [ div [ HA.class "nb-ref-head" ]
+                    [ Html.i [ HA.class "bi bi-journal-code" ] []
+                    , Html.input
+                        [ HA.class "nb-ref-search", HA.placeholder "Search functions…", HA.value query, HA.attribute "spellcheck" "false", HE.onInput SetRefQuery ]
+                        []
+                    , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseRef ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                    ]
+                , div [ HA.class "nb-ref-list" ] (List.map refEntry (Reference.search query))
+                ]
+
+
+refEntry : Reference.Entry -> Html NbMsg
+refEntry entry =
+    button [ HA.class "nb-ref-item", HA.title (entry.name ++ " : " ++ entry.signature), HE.onClick (InsertSnippet entry.snippet) ]
+        [ span [ HA.class "nb-ref-name" ] [ text entry.name ]
+        , span [ HA.class "nb-ref-doc" ] [ text entry.doc ]
+        ]
+
+
+{-| The find / replace bar: a query + replacement, a live count of matching cells, and replace-all. -}
+findBar : Maybe ( String, String ) -> Doc -> Html NbMsg
+findBar find doc =
+    case find of
+        Nothing ->
+            text ""
+
+        Just ( q, r ) ->
+            let
+                count =
+                    List.length (List.filter (\c -> q /= "" && String.contains q c.source) doc.cells)
+            in
+            section [ HA.class "nb-find" ]
+                [ Html.i [ HA.class "bi bi-search" ] []
+                , Html.input
+                    [ HA.class "nb-find-input", HA.placeholder "Find in cells…", HA.value q, HA.attribute "spellcheck" "false", HE.onInput SetFindQuery ]
+                    []
+                , Html.input
+                    [ HA.class "nb-find-input", HA.placeholder "Replace with…", HA.value r, HA.attribute "spellcheck" "false", HE.onInput SetFindReplace ]
+                    []
+                , span [ HA.class "nb-find-count" ]
+                    [ text
+                        (if q == "" then
+                            ""
+
+                         else
+                            String.fromInt count
+                                ++ (if count == 1 then
+                                        " cell"
+
+                                    else
+                                        " cells"
+                                   )
+                        )
+                    ]
+                , button [ HA.class "nb-action", HE.onClick ReplaceAll ] [ text "Replace all" ]
+                , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseFind ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                ]
 
 
 {-| The "Paste data" panel: a name + a textarea that auto-detects JSON vs CSV/TSV on import. -}

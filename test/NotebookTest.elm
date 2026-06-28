@@ -15,6 +15,7 @@ import Expect exposing (Expectation)
 import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
 import Notebook.Complete as Complete
+import Notebook.Correlation as Correlation
 import Notebook.Csv as Csv
 import Notebook.Deps as Deps
 import Notebook.Doc as Doc
@@ -23,6 +24,7 @@ import Notebook.Import as Import
 import Set
 import Notebook.Export as Export
 import Notebook.Kernel as Kernel
+import Notebook.Pivot as Pivot
 import Notebook.Profile as Profile
 import Notebook.Serialize as Serialize
 import Notebook.Suggest as Suggest
@@ -45,6 +47,8 @@ suite =
         , hintTests
         , interpolateTests
         , profileTests
+        , pivotTests
+        , correlationTests
         , completeTests
         , controlFlowTests
         , scopeTests
@@ -555,6 +559,87 @@ hintTests =
             \_ -> Expect.equal (Just "mean") (Hint.closest "maen" [ "mean", "median", "groupBy" ])
         , test "closest stays silent when nothing is near" <|
             \_ -> Expect.equal Nothing (Hint.closest "xyzzy" [ "mean", "total" ])
+        ]
+
+
+-- PIVOT TABLES ---------------------------------------------------------------
+
+
+pivotTests : Test
+pivotTests =
+    let
+        sales =
+            VList
+                [ VRecord [ ( "region", s "W" ), ( "product", s "A" ), ( "units", n 10 ) ]
+                , VRecord [ ( "region", s "W" ), ( "product", s "B" ), ( "units", n 5 ) ]
+                , VRecord [ ( "region", s "E" ), ( "product", s "A" ), ( "units", n 7 ) ]
+                ]
+
+        spec =
+            { row = "region", column = "product", value = "units", agg = Pivot.Sum }
+
+        grid =
+            Pivot.pivot spec sales
+    in
+    describe "pivot tables"
+        [ test "columns are the distinct values of the column field" <|
+            \_ -> Expect.equal [ "A", "B" ] grid.columns
+        , test "rows are the distinct values of the row field" <|
+            \_ -> Expect.equal [ "W", "E" ] (List.map .label grid.rows)
+        , test "cells aggregate the value field, blank where empty" <|
+            \_ -> Expect.equal [ [ "10", "5" ], [ "7", "" ] ] (List.map .cells grid.rows)
+        , test "mean aggregation" <|
+            \_ ->
+                Expect.equal [ [ "7.5" ] ]
+                    (List.map .cells (Pivot.pivot { row = "region", column = "product", value = "units", agg = Pivot.Mean } onePair).rows)
+        , test "defaultSpec picks a text row, a distinct column and a numeric value" <|
+            \_ ->
+                let
+                    d =
+                        Pivot.defaultSpec sales
+                in
+                Expect.equal ( "region", "product", "units" ) ( d.row, d.column, d.value )
+        ]
+
+
+onePair : Value
+onePair =
+    VList
+        [ VRecord [ ( "region", s "W" ), ( "product", s "A" ), ( "units", n 10 ) ]
+        , VRecord [ ( "region", s "W" ), ( "product", s "A" ), ( "units", n 5 ) ]
+        ]
+
+
+-- CORRELATION ----------------------------------------------------------------
+
+
+correlationTests : Test
+correlationTests =
+    let
+        tbl =
+            VList
+                [ VRecord [ ( "a", n 1 ), ( "b", n 2 ) ]
+                , VRecord [ ( "a", n 2 ), ( "b", n 4 ) ]
+                , VRecord [ ( "a", n 3 ), ( "b", n 6 ) ]
+                ]
+
+        m =
+            Correlation.matrix tbl
+
+        rounded =
+            List.map (List.map (Maybe.map (\r -> round (r * 100)))) m.rows
+    in
+    describe "correlation matrix"
+        [ test "columns are the numeric columns" <|
+            \_ -> Expect.equal [ "a", "b" ] m.columns
+        , test "perfectly-correlated columns give r = 1 everywhere" <|
+            \_ -> Expect.equal [ [ Just 100, Just 100 ], [ Just 100, Just 100 ] ] rounded
+        , test "a constant column has undefined correlation" <|
+            \_ ->
+                Correlation.matrix
+                    (VList [ VRecord [ ( "k", n 5 ) ], VRecord [ ( "k", n 5 ) ] ])
+                    |> .rows
+                    |> Expect.equal [ [ Nothing ] ]
         ]
 
 

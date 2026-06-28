@@ -63,7 +63,7 @@ jobs:
             src/Notebook/Kernel.elm src/Notebook/Doc.elm src/Notebook/Suggest.elm \
             src/Notebook/Chart.elm src/Notebook/Csv.elm src/Notebook/Serialize.elm \
             vendor/Workspace/Types.elm vendor/Workspace/Table.elm src/Notebook/Export.elm \
-            src/Notebook/Deps.elm src/Notebook/Hint.elm src/Notebook/Profile.elm src/Notebook/Import.elm src/Notebook/Complete.elm > report.json
+            src/Notebook/Deps.elm src/Notebook/Hint.elm src/Notebook/Profile.elm src/Notebook/Import.elm src/Notebook/Complete.elm src/Notebook/Pivot.elm src/Notebook/Correlation.elm src/Notebook/Outline.elm src/Notebook/Reference.elm > report.json
           code=$?
           set -e
           perl tools/gen-test-report.pl report.json public/tests.html

@@ -1,4 +1,4 @@
-module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, valueHtml, markdownHtml, interpolate)
+module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, outlinePanel, valueHtml, markdownHtml, interpolate)
 
 {-| The HTML view of a notebook: syntax-highlighted, auto-growing editors, outputs rendered as
 scalars / records / tables (recursively, so nested tables nest) / headerless 2-D grids / errors,
@@ -22,7 +22,10 @@ import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
 import Notebook.Chart as Chart exposing (ChartKind)
 import Notebook.Complete as Complete
+import Notebook.Correlation as Correlation
 import Notebook.Doc exposing (Doc)
+import Notebook.Outline exposing (Heading)
+import Notebook.Pivot as Pivot
 import Notebook.Profile as Profile
 import Notebook.Suggest exposing (Suggestion)
 import Notebook.Value as Value
@@ -60,10 +63,46 @@ type alias Config msg =
     , evalInline : String -> Maybe String
     , isProfile : Int -> Bool
     , onProfile : Int -> Bool -> msg
+    , pivotOf : Int -> Maybe Pivot.Spec
+    , onPivot : Int -> Bool -> msg
+    , onPivotRow : Int -> String -> msg
+    , onPivotColumn : Int -> String -> msg
+    , onPivotValue : Int -> String -> msg
+    , onPivotAgg : Int -> String -> msg
+    , isCorr : Int -> Bool
+    , onCorr : Int -> Bool -> msg
     , report : Bool
     , activeCell : Maybe Int
     , scopeNames : List String
+    , findQuery : Maybe String
+    , isFolded : Int -> Bool
+    , onFold : Int -> msg
+    , onDuplicate : Int -> msg
+    , onInsertAbove : Int -> msg
+    , onInsertBelow : Int -> msg
+    , onRunAbove : Int -> msg
+    , onRunBelow : Int -> msg
     }
+
+
+{-| Does this cell's source contain the active find query? -}
+cellMatches : Config msg -> Cell -> Bool
+cellMatches config cell =
+    case config.findQuery of
+        Just q ->
+            q /= "" && String.contains q cell.source
+
+        Nothing ->
+            False
+
+
+matchClass : Config msg -> Cell -> String
+matchClass config cell =
+    if cellMatches config cell then
+        " nb-cell-match"
+
+    else
+        ""
 
 
 
@@ -82,6 +121,9 @@ cellView config cell =
     if config.report then
         reportCellView config cell
 
+    else if config.isFolded cell.id then
+        foldedCellView config cell
+
     else
         case cell.kind of
             Code ->
@@ -94,13 +136,55 @@ cellView config cell =
                 inputCellView config cell
 
 
+{-| A collapsed cell: a one-line summary; click the chevron to expand. -}
+foldedCellView : Config msg -> Cell -> Html msg
+foldedCellView config cell =
+    div [ HA.id (cellDomId cell.id), HA.class "nb-cell nb-cell-folded" ]
+        [ div [ HA.class "nb-gutter" ] [ span [ HA.class "nb-prompt" ] [ text (foldTag cell) ] ]
+        , div [ HA.class "nb-body nb-folded-body" ]
+            [ button [ HA.class "nb-btn nb-btn-ghost", HA.title "Expand", HE.onClick (config.onFold cell.id) ]
+                [ Html.i [ HA.class "bi bi-chevron-right" ] [] ]
+            , span [ HA.class "nb-fold-summary" ] [ text (foldSummary cell) ]
+            ]
+        ]
+
+
+foldTag : Cell -> String
+foldTag cell =
+    case cell.kind of
+        Markdown ->
+            "md"
+
+        Input ->
+            "in"
+
+        Code ->
+            promptLabel "In" cell.count
+
+
+foldSummary : Cell -> String
+foldSummary cell =
+    let
+        line =
+            firstLine cell.source
+    in
+    if String.length line > 90 then
+        String.left 89 line ++ "…"
+
+    else if String.trim line == "" then
+        "(empty " ++ foldTag cell ++ " cell)"
+
+    else
+        line
+
+
 {-| A cell in report mode: prose renders, a code cell shows only its output, an input keeps its
 widget — no editors, prompts or toolbars. -}
 reportCellView : Config msg -> Cell -> Html msg
 reportCellView config cell =
     case cell.kind of
         Markdown ->
-            div [ HA.class "nb-cell nb-cell-md nb-cell-report" ]
+            div [ HA.id (cellDomId cell.id), HA.class "nb-cell nb-cell-md nb-cell-report" ]
                 [ markdownHtml (interpolate config.evalInline cell.source) ]
 
         Input ->
@@ -262,6 +346,7 @@ codeCellView config cell =
                     else
                         ""
                    )
+                ++ matchClass config cell
             )
         ]
         [ div [ HA.class "nb-gutter" ]
@@ -319,7 +404,7 @@ applyCompletion config cell name =
 
 markdownCellView : Config msg -> Cell -> Html msg
 markdownCellView config cell =
-    div [ HA.class "nb-cell nb-cell-md" ]
+    div [ HA.id (cellDomId cell.id), HA.class ("nb-cell nb-cell-md" ++ matchClass config cell) ]
         [ div [ HA.class "nb-gutter" ] [ span [ HA.class "nb-prompt nb-prompt-md" ] [ text "md" ] ]
         , div [ HA.class "nb-body" ]
             [ markdownHtml (interpolate config.evalInline cell.source)
@@ -415,25 +500,31 @@ cellToolbar config cell =
                 Input ->
                     text ""
 
-        runButton =
+        runGroup =
             case cell.kind of
                 Code ->
-                    button
-                        [ HA.class "nb-btn nb-btn-run", HE.onClick (config.onRun cell.id) ]
-                        [ text "▶ Run" ]
+                    [ button [ HA.class "nb-btn nb-btn-run", HE.onClick (config.onRun cell.id) ] [ text "▶ Run" ]
+                    , iconBtn "bi-chevron-bar-up" "Run the cells above" (config.onRunAbove cell.id)
+                    , iconBtn "bi-chevron-bar-down" "Run from here down" (config.onRunBelow cell.id)
+                    ]
 
                 _ ->
-                    text ""
+                    []
     in
     div [ HA.class "nb-toolbar" ]
-        [ runButton
-        , commentMarker config cell
-        , div [ HA.class "nb-toolbar-spacer" ] []
-        , toolButton "↑" (config.onMoveUp cell.id)
-        , toolButton "↓" (config.onMoveDown cell.id)
-        , convertButton
-        , toolButton "✕" (config.onDelete cell.id)
-        ]
+        (runGroup
+            ++ [ commentMarker config cell
+               , div [ HA.class "nb-toolbar-spacer" ] []
+               , iconBtn "bi-dash-square" "Collapse" (config.onFold cell.id)
+               , iconBtn "bi-files" "Duplicate" (config.onDuplicate cell.id)
+               , iconBtn "bi-text-indent-left" "Insert cell above" (config.onInsertAbove cell.id)
+               , iconBtn "bi-text-indent-right" "Insert cell below" (config.onInsertBelow cell.id)
+               , toolButton "↑" (config.onMoveUp cell.id)
+               , toolButton "↓" (config.onMoveDown cell.id)
+               , convertButton
+               , toolButton "✕" (config.onDelete cell.id)
+               ]
+        )
 
 
 commentMarker : Config msg -> Cell -> Html msg
@@ -453,6 +544,11 @@ commentMarker config cell =
 toolButton : String -> msg -> Html msg
 toolButton label msg =
     button [ HA.class "nb-btn nb-btn-ghost", HE.onClick msg ] [ text label ]
+
+
+iconBtn : String -> String -> msg -> Html msg
+iconBtn icon title msg =
+    button [ HA.class "nb-btn nb-btn-ghost nb-btn-icon", HA.title title, HE.onClick msg ] [ Html.i [ HA.class ("bi " ++ icon) ] [] ]
 
 
 outputArea : Config msg -> Cell -> Html msg
@@ -495,24 +591,137 @@ outputArea config cell =
 
 renderOutput : Config msg -> Cell -> Value -> Html msg
 renderOutput config cell value =
-    if config.isProfile cell.id && Value.isTable value then
-        profilePanel value
-
-    else
-        case config.chartOf cell.id of
-            Just kind ->
-                if Chart.chartable value then
-                    div [ HA.class "nb-chart-box" ] [ Chart.view kind (config.colOf cell.id) value ]
-
-                else
-                    valueHtml value
+    if Value.isTable value then
+        case config.pivotOf cell.id of
+            Just spec ->
+                pivotView config cell value spec
 
             Nothing ->
-                if Value.isTable value then
-                    interactiveTable config cell value
+                if config.isCorr cell.id then
+                    correlationView value
+
+                else if config.isProfile cell.id then
+                    profilePanel value
 
                 else
-                    valueHtml value
+                    chartOrTable config cell value
+
+    else
+        chartOrTable config cell value
+
+
+chartOrTable : Config msg -> Cell -> Value -> Html msg
+chartOrTable config cell value =
+    case config.chartOf cell.id of
+        Just kind ->
+            if Chart.chartable value then
+                div [ HA.class "nb-chart-box" ] [ Chart.view kind (config.colOf cell.id) value ]
+
+            else
+                valueHtml value
+
+        Nothing ->
+            if Value.isTable value then
+                interactiveTable config cell value
+
+            else
+                valueHtml value
+
+
+{-| A pivot of the table: field pickers plus the cross-tab grid. -}
+pivotView : Config msg -> Cell -> Value -> Pivot.Spec -> Html msg
+pivotView config cell value spec =
+    let
+        cols =
+            Value.tableColumns value
+
+        grid =
+            Pivot.pivot spec value
+
+        pick labelText options selected onPick =
+            Html.label [ HA.class "nb-pivot-field" ]
+                [ span [ HA.class "nb-pivot-label" ] [ text labelText ]
+                , Html.select [ HA.class "nb-chart-col", HE.onInput onPick ]
+                    (List.map (\o -> Html.option [ HA.value o, HA.selected (o == selected) ] [ text o ]) options)
+                ]
+    in
+    div [ HA.class "nb-pivot" ]
+        [ div [ HA.class "nb-pivot-controls" ]
+            [ pick "Rows" cols spec.row (config.onPivotRow cell.id)
+            , pick "Columns" cols spec.column (config.onPivotColumn cell.id)
+            , pick "Value" cols spec.value (config.onPivotValue cell.id)
+            , pick "" (List.map Pivot.aggLabel Pivot.aggs) (Pivot.aggLabel spec.agg) (config.onPivotAgg cell.id)
+            ]
+        , wrapTable
+            [ thead []
+                [ tr []
+                    (th [ HA.class "nb-pivot-corner" ] [ text (spec.row ++ " ╲ " ++ spec.column) ]
+                        :: List.map (\c -> th [] [ text c ]) grid.columns
+                    )
+                ]
+            , tbody []
+                (List.map
+                    (\r ->
+                        tr []
+                            (th [ HA.class "nb-pivot-rowhead" ] [ text r.label ]
+                                :: List.map (\c -> td [ HA.class "nb-prof-n" ] [ text c ]) r.cells
+                            )
+                    )
+                    grid.rows
+                )
+            ]
+        ]
+
+
+{-| The correlation matrix of the table's numeric columns, colour-graded blue (positive) to red. -}
+correlationView : Value -> Html msg
+correlationView value =
+    let
+        m =
+            Correlation.matrix value
+    in
+    if List.isEmpty m.columns then
+        p [ HA.class "nb-vars-empty" ] [ text "Needs a table with numeric columns." ]
+
+    else
+        wrapTable
+            [ thead []
+                [ tr [] (th [] [] :: List.map (\c -> th [] [ text c ]) m.columns) ]
+            , tbody []
+                (List.map2
+                    (\name row -> tr [] (th [ HA.class "nb-pivot-rowhead" ] [ text name ] :: List.map corrCell row))
+                    m.columns
+                    m.rows
+                )
+            ]
+
+
+corrCell : Maybe Float -> Html msg
+corrCell maybeR =
+    case maybeR of
+        Just r ->
+            td [ HA.class "nb-corr-cell", HA.style "background" (corrColor r) ] [ text (round2 r) ]
+
+        Nothing ->
+            td [ HA.class "nb-corr-cell" ] [ text "—" ]
+
+
+corrColor : Float -> String
+corrColor r =
+    let
+        alpha =
+            String.fromFloat (0.1 + 0.75 * abs r)
+    in
+    if r >= 0 then
+        "rgba(91, 110, 245, " ++ alpha ++ ")"
+
+    else
+        "rgba(217, 48, 37, " ++ alpha ++ ")"
+
+
+round2 : Float -> String
+round2 r =
+    Value.numberToString (toFloat (round (r * 100)) / 100)
 
 
 {-| A per-column overview of a table: type, count, distinct, and numeric min / max / mean. -}
@@ -702,8 +911,17 @@ chartToggle config cell value =
             profileOn =
                 config.isProfile cell.id
 
+            pivotOn =
+                config.pivotOf cell.id /= Nothing
+
+            corrOn =
+                config.isCorr cell.id
+
+            special =
+                profileOn || pivotOn || corrOn
+
             current =
-                if profileOn then
+                if special then
                     Nothing
 
                 else
@@ -729,17 +947,20 @@ chartToggle config cell value =
                     (\k -> chip (Chart.label k) (current == Just k) (config.onChart cell.id (Just k)))
                     (Chart.chartableKinds value)
 
-            profileChip =
+            tableChips =
                 if Value.isTable value then
-                    [ chip "Profile" profileOn (config.onProfile cell.id (not profileOn)) ]
+                    [ chip "Profile" profileOn (config.onProfile cell.id (not profileOn))
+                    , chip "Pivot" pivotOn (config.onPivot cell.id (not pivotOn))
+                    , chip "Corr" corrOn (config.onCorr cell.id (not corrOn))
+                    ]
 
                 else
                     []
         in
         div [ HA.class "nb-chart-toggle" ]
-            (chip "Table" (current == Nothing && not profileOn) (config.onChart cell.id Nothing)
+            (chip "Table" (current == Nothing && not special) (config.onChart cell.id Nothing)
                 :: kindChips
-                ++ profileChip
+                ++ tableChips
                 ++ [ columnPicker config cell value current ]
             )
 
@@ -994,6 +1215,35 @@ kindClass kind =
 
 
 -- VARIABLES INSPECTOR --------------------------------------------------------
+
+
+{-| The DOM id of a cell's element, so the outline can link to it. -}
+cellDomId : Int -> String
+cellDomId id =
+    "nb-cell-" ++ String.fromInt id
+
+
+{-| The outline: the notebook's Markdown headings as jump links, indented by level. Hidden when
+there are none. -}
+outlinePanel : List Heading -> Html msg
+outlinePanel hs =
+    if List.isEmpty hs then
+        text ""
+
+    else
+        div [ HA.class "nb-outline" ]
+            (h3 [ HA.class "nb-outline-title" ] [ text "Outline" ]
+                :: List.map outlineLink hs
+            )
+
+
+outlineLink : Heading -> Html msg
+outlineLink heading =
+    a
+        [ HA.class ("nb-outline-link nb-outline-l" ++ String.fromInt heading.level)
+        , HA.href ("#" ++ cellDomId heading.cellId)
+        ]
+        [ text heading.text ]
 
 
 {-| A panel listing the user's kernel bindings (name · type · value preview). Clicking one inserts

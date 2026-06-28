@@ -1,6 +1,6 @@
 module Notebook.Doc exposing
     ( Doc, empty, fromSpec
-    , append, appendInput, insertAfter, remove, moveUp, moveDown
+    , append, appendInput, insertAfter, insertBefore, duplicate, remove, moveUp, moveDown
     , setSource, setKind, setInputValue, setInputName, setInputControl
     , runAll, runThrough, runAffected, clearOutputs
     , find, lastValue, codeCount, variables, executableIds
@@ -97,6 +97,37 @@ insertAfter targetId kind source doc =
         | cells = List.concatMap place doc.cells
         , nextId = doc.nextId + 1
     }
+
+
+{-| Insert a new cell directly before the cell with the given id. -}
+insertBefore : Int -> CellKind -> String -> Doc -> Doc
+insertBefore targetId kind source doc =
+    let
+        cell =
+            newCell doc.nextId kind source
+
+        place existing =
+            if existing.id == targetId then
+                [ cell, existing ]
+
+            else
+                [ existing ]
+    in
+    { doc | cells = List.concatMap place doc.cells, nextId = doc.nextId + 1 }
+
+
+{-| Insert a copy of a cell (a fresh, un-run one with the same kind/source/input) right after it. -}
+duplicate : Int -> Doc -> Doc
+duplicate targetId doc =
+    let
+        place existing =
+            if existing.id == targetId then
+                [ existing, { existing | id = doc.nextId, output = OutNone, count = Nothing } ]
+
+            else
+                [ existing ]
+    in
+    { doc | cells = List.concatMap place doc.cells, nextId = doc.nextId + 1 }
 
 
 {-| Remove a cell by id. -}
