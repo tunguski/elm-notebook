@@ -19,15 +19,21 @@ import Notebook.Correlation as Correlation
 import Notebook.Csv as Csv
 import Notebook.Deps as Deps
 import Notebook.Doc as Doc
+import Notebook.Heatmap as Heatmap
 import Notebook.Hint as Hint
 import Notebook.Import as Import
 import Set
 import Notebook.Export as Export
 import Notebook.Kernel as Kernel
+import Notebook.Math as Math
 import Notebook.Pivot as Pivot
 import Notebook.Profile as Profile
 import Notebook.Serialize as Serialize
+import Notebook.Share as Share
+import Notebook.Slides as Slides
+import Notebook.Sparkline as Sparkline
 import Notebook.Suggest as Suggest
+import Notebook.Templates as Templates
 import Notebook.Value as Value
 import Notebook.View as NbView
 import Test exposing (Test, describe, test)
@@ -49,6 +55,12 @@ suite =
         , profileTests
         , pivotTests
         , correlationTests
+        , heatmapTests
+        , sparklineTests
+        , slidesTests
+        , shareTests
+        , mathTests
+        , templatesTests
         , completeTests
         , controlFlowTests
         , scopeTests
@@ -1057,6 +1069,110 @@ lessonTests =
     describe "lessons run clean end-to-end"
         (runsClean "starter" Suggest.starter
             :: List.map (\lesson -> runsClean lesson.id lesson.cells) Suggest.lessons
+        )
+
+
+heatmapTests : Test
+heatmapTests =
+    describe "heatmap (conditional formatting)"
+        [ test "range is the column's min and max" <|
+            \_ -> Heatmap.range [ 3, 1, 2 ] |> Expect.equal (Just ( 1, 3 ))
+        , test "an empty column has no range" <|
+            \_ -> Heatmap.range [] |> Expect.equal Nothing
+        , test "the minimum value is faint" <|
+            \_ -> Expect.equal True (String.contains "0.07)" (Heatmap.color ( 0, 10 ) 0))
+        , test "the maximum value is strong" <|
+            \_ -> Expect.equal True (String.contains "0.7)" (Heatmap.color ( 0, 10 ) 10))
+        , test "a flat column shades at the mid tone" <|
+            \_ -> Expect.equal True (String.contains "0.385)" (Heatmap.color ( 5, 5 ) 5))
+        ]
+
+
+sparklineTests : Test
+sparklineTests =
+    describe "sparkline geometry"
+        [ test "an empty series has no points" <|
+            \_ -> Sparkline.points [] |> Expect.equal []
+        , test "one point per value" <|
+            \_ -> List.length (Sparkline.points [ 1, 2, 3, 4 ]) |> Expect.equal 4
+        , test "a single value sits at the centre" <|
+            \_ -> List.length (Sparkline.points [ 5 ]) |> Expect.equal 1
+        , test "larger values are plotted higher (smaller y)" <|
+            \_ ->
+                case List.map Tuple.second (Sparkline.points [ 0, 10 ]) of
+                    [ a, b ] ->
+                        Expect.equal True (a > b)
+
+                    _ ->
+                        Expect.fail "expected two points"
+        ]
+
+
+slidesTests : Test
+slidesTests =
+    let
+        deck =
+            Doc.empty
+                |> Doc.append Markdown "# Intro\n\nwelcome"
+                |> Doc.append Code "1 + 1"
+                |> Doc.append Markdown "## Details"
+                |> Doc.append Code "2 + 2"
+                |> Slides.slides
+    in
+    describe "slides (presentation mode)"
+        [ test "a deck splits at top-level headings" <|
+            \_ -> List.length deck |> Expect.equal 2
+        , test "slide titles come from their headings" <|
+            \_ -> List.map .title deck |> Expect.equal [ "Intro", "Details" ]
+        , test "cells travel with their heading" <|
+            \_ -> List.map (\s -> List.length s.cells) deck |> Expect.equal [ 2, 2 ]
+        ]
+
+
+shareTests : Test
+shareTests =
+    let
+        doc =
+            Doc.empty
+                |> Doc.append Markdown "# Shared"
+                |> Doc.append Code "mean [ 1, 2, 3 ]"
+    in
+    describe "share by link"
+        [ test "encode → decode round-trips the notebook" <|
+            \_ ->
+                Share.decode (Share.encode doc)
+                    |> Maybe.map Serialize.encode
+                    |> Expect.equal (Just (Serialize.encode doc))
+        , test "a link carries the encoded token in a #nb= fragment" <|
+            \_ -> Expect.equal True (String.startsWith "#nb=" (Share.link "" doc))
+        , test "garbage decodes to Nothing" <|
+            \_ -> Share.decode "" |> Expect.equal Nothing
+        ]
+
+
+mathTests : Test
+mathTests =
+    describe "inline math symbol substitution"
+        [ test "Greek letters" <|
+            \_ -> Math.replaceSymbols "\\alpha + \\beta" |> Expect.equal "α + β"
+        , test "longer macros win over their prefixes (\\leq before \\le)" <|
+            \_ -> Math.replaceSymbols "\\leq \\le \\geq \\ge" |> Expect.equal "≤ ≤ ≥ ≥"
+        , test "operators and big symbols" <|
+            \_ -> Math.replaceSymbols "\\sum \\sqrt \\pi \\times" |> Expect.equal "∑ √ π ×"
+        ]
+
+
+templatesTests : Test
+templatesTests =
+    describe "starter templates"
+        ([ test "there are several templates" <|
+            \_ -> Expect.equal True (List.length Templates.all >= 4)
+         , test "byId finds a template by its id" <|
+            \_ -> Templates.byId "sales" |> Maybe.map .title |> Expect.equal (Just "Sales analysis")
+         , test "an unknown id is Nothing" <|
+            \_ -> Templates.byId "nope" |> Expect.equal Nothing
+         ]
+            ++ List.map (\t -> runsClean ("template " ++ t.id) t.cells) Templates.all
         )
 
 

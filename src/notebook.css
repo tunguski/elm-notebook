@@ -488,3 +488,45 @@ a:hover { text-decoration: underline; }
 .nb-cell-folded { cursor: default; }
 .nb-folded-body { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
 .nb-fold-summary { font-family: var(--mono); font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- round 4: heat / summary chips on the data grid ---- */
+.nb-table-chip { font-size: 11px; padding: 1px 9px; }
+.nb-tfoot td, .nb-tfoot th { border-top: 2px solid var(--line); font-weight: 600; }
+.nb-tfoot-n { font-variant-numeric: tabular-nums; }
+.nb-prof-spark { padding: 2px 6px; }
+.nb-prof-spark svg { display: block; }
+
+/* ---- math in markdown ---- */
+.nb-math { font-family: "Cambria Math", Georgia, serif; font-style: italic; white-space: pre; }
+.nb-math sup, .nb-math sub { font-style: normal; font-size: 0.7em; }
+
+/* ---- slideshow / presentation mode ---- */
+.nb-slideshow { display: flex; flex-direction: column; gap: 14px; }
+.nb-slide-bar { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.nb-slide-pos { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 64px; text-align: center; }
+.nb-slide-bar .nb-action-report { margin-left: auto; }
+.nb-slide { min-height: 60vh; padding: 18px 26px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.nb-slide .nb-md h2.nb-h1 { font-size: 30px; }
+.nb-slide .nb-md h3.nb-h2 { font-size: 22px; }
+.nb-slide-empty { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+/* ---- share by link ---- */
+.nb-share { background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.nb-share-head { display: flex; align-items: center; gap: 8px; }
+.nb-share-title { flex: 1; font-weight: 600; }
+.nb-share-title .bi { color: var(--muted); margin-right: 4px; }
+.nb-share-label { font-size: 12px; color: var(--muted); }
+.nb-share-link, .nb-share-input { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; }
+.nb-share-link { background: var(--accent-soft); color: var(--muted); }
+.nb-share-input:focus { outline: none; border-color: var(--accent); }
+
+/* ---- template gallery ---- */
+.nb-templates { background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; margin: 10px 0; }
+.nb-templates-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.nb-templates-title { flex: 1; font-weight: 600; }
+.nb-templates-title .bi { color: var(--muted); margin-right: 4px; }
+.nb-templates-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.nb-template-card { display: flex; flex-direction: column; gap: 3px; text-align: left; background: none; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; cursor: pointer; }
+.nb-template-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.nb-template-name { font-weight: 700; color: var(--accent); }
+.nb-template-blurb { font-size: 12px; color: var(--muted); }

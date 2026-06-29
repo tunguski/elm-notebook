@@ -24,9 +24,12 @@ import Notebook.Chart as Chart exposing (ChartKind)
 import Notebook.Complete as Complete
 import Notebook.Correlation as Correlation
 import Notebook.Doc exposing (Doc)
+import Notebook.Heatmap as Heatmap
+import Notebook.Math as Math
 import Notebook.Outline exposing (Heading)
 import Notebook.Pivot as Pivot
 import Notebook.Profile as Profile
+import Notebook.Sparkline as Sparkline
 import Notebook.Suggest exposing (Suggestion)
 import Notebook.Value as Value
 
@@ -82,6 +85,10 @@ type alias Config msg =
     , onInsertBelow : Int -> msg
     , onRunAbove : Int -> msg
     , onRunBelow : Int -> msg
+    , heatOn : Int -> Bool
+    , onHeat : Int -> Bool -> msg
+    , footerOn : Int -> Bool
+    , onFooter : Int -> Bool -> msg
     }
 
 
@@ -731,6 +738,14 @@ profilePanel value =
         num maybe =
             maybe |> Maybe.map Value.numberToString |> Maybe.withDefault "—"
 
+        spark col =
+            case columnNums col.name (itemsOf value) of
+                [] ->
+                    text ""
+
+                nums ->
+                    Sparkline.svg nums
+
         row col =
             tr []
                 [ td [ HA.class "nb-prof-name" ] [ text col.name ]
@@ -740,6 +755,7 @@ profilePanel value =
                 , td [ HA.class "nb-prof-n" ] [ text (num col.min) ]
                 , td [ HA.class "nb-prof-n" ] [ text (num col.max) ]
                 , td [ HA.class "nb-prof-n" ] [ text (num col.mean) ]
+                , td [ HA.class "nb-prof-spark" ] [ spark col ]
                 ]
     in
     div [ HA.class "nb-table-wrap" ]
@@ -747,7 +763,7 @@ profilePanel value =
             [ thead []
                 [ tr []
                     (List.map (\h -> th [] [ text h ])
-                        [ "column", "type", "count", "distinct", "min", "max", "mean" ]
+                        [ "column", "type", "count", "distinct", "min", "max", "mean", "trend" ]
                     )
                 ]
             , tbody [] (List.map row (Profile.columns value))
@@ -818,6 +834,31 @@ interactiveTable config cell value =
                         cols
                     )
                 ]
+
+        numCols =
+            Chart.numericColumns value
+
+        heat =
+            config.heatOn cell.id
+
+        foot =
+            config.footerOn cell.id
+
+        ranges =
+            if heat then
+                List.filterMap
+                    (\c -> Heatmap.range (columnNums c sorted) |> Maybe.map (\rg -> ( c, rg )))
+                    numCols
+
+            else
+                []
+
+        footRows =
+            if foot then
+                [ summaryFooter numCols cols sorted ]
+
+            else
+                []
     in
     div [ HA.class "nb-table-x" ]
         [ div [ HA.class "nb-table-controls" ]
@@ -830,8 +871,18 @@ interactiveTable config cell value =
                 ]
                 []
             , span [ HA.class "nb-table-count" ] [ text (countLabel (List.length shown) total) ]
+            , if List.isEmpty numCols then
+                text ""
+
+              else
+                tableChip "Heat" heat (config.onHeat cell.id (not heat))
+            , if List.isEmpty numCols then
+                text ""
+
+              else
+                tableChip "Σ Summary" foot (config.onFooter cell.id (not foot))
             ]
-        , wrapTable [ header, tbody [] (List.map (tableRow cols) shown) ]
+        , wrapTable ([ header, tbody [] (List.map (dataRow heat ranges cols) shown) ] ++ footRows)
         , if total > tableCap then
             button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
                 [ text
@@ -851,6 +902,119 @@ interactiveTable config cell value =
 tableCap : Int
 tableCap =
     20
+
+
+{-| A small on/off chip in the table controls (heat, summary). -}
+tableChip : String -> Bool -> msg -> Html msg
+tableChip lbl active msg =
+    button
+        [ HA.class
+            ("nb-chip nb-table-chip"
+                ++ (if active then
+                        " nb-chip-on"
+
+                    else
+                        ""
+                   )
+            )
+        , HE.onClick msg
+        ]
+        [ text lbl ]
+
+
+{-| A data row whose numeric cells are heat-shaded (when `heat` is on) by their column's range. -}
+dataRow : Bool -> List ( String, ( Float, Float ) ) -> List String -> Value -> Html msg
+dataRow heat ranges cols row =
+    tr [] (List.map (heatCell heat ranges row) cols)
+
+
+heatCell : Bool -> List ( String, ( Float, Float ) ) -> Value -> String -> Html msg
+heatCell heat ranges row col =
+    let
+        content =
+            cellHtml (Value.fieldOf col row)
+    in
+    case ( heat, lookupRange col ranges, Value.fieldOf col row ) of
+        ( True, Just rg, Just (VNum n) ) ->
+            td [ HA.style "background" (Heatmap.color rg n) ] [ content ]
+
+        _ ->
+            td [] [ content ]
+
+
+lookupRange : String -> List ( String, ( Float, Float ) ) -> Maybe ( Float, Float )
+lookupRange col ranges =
+    case ranges of
+        ( c, rg ) :: rest ->
+            if c == col then
+                Just rg
+
+            else
+                lookupRange col rest
+
+        [] ->
+            Nothing
+
+
+{-| The numeric values of a column across the given rows. -}
+columnNums : String -> List Value -> List Float
+columnNums col rows =
+    List.filterMap
+        (\row ->
+            case Value.fieldOf col row of
+                Just (VNum n) ->
+                    Just n
+
+                _ ->
+                    Nothing
+        )
+        rows
+
+
+{-| A two-line table footer: the sum (Σ) and mean (x̄) of every numeric column. -}
+summaryFooter : List String -> List String -> List Value -> Html msg
+summaryFooter numCols cols rows =
+    Html.tfoot []
+        [ footerRow "Σ" List.sum numCols cols rows
+        , footerRow "x̄" meanOf numCols cols rows
+        ]
+
+
+footerRow : String -> (List Float -> Float) -> List String -> List String -> List Value -> Html msg
+footerRow lbl agg numCols cols rows =
+    let
+        firstNumeric =
+            List.head numCols
+
+        cellFor col =
+            if List.member col numCols then
+                let
+                    nums =
+                        columnNums col rows
+
+                    shown =
+                        if firstNumeric == Just col then
+                            lbl ++ " " ++ round2 (agg nums)
+
+                        else
+                            round2 (agg nums)
+                in
+                td [ HA.class "nb-prof-n nb-tfoot-n" ] [ text shown ]
+
+            else
+                td [ HA.class "nb-tfoot-n" ] []
+    in
+    tr [ HA.class "nb-tfoot" ] (List.map cellFor cols)
+
+
+meanOf : List Float -> Float
+meanOf xs =
+    case xs of
+        [] ->
+            0
+
+        _ ->
+            List.sum xs / toFloat (List.length xs)
 
 
 rowMatches : String -> Value -> Bool
@@ -1564,6 +1728,14 @@ inlineScan chars textRev nodes =
 
                 Nothing ->
                     inlineScan rest ('`' :: textRev) nodes
+
+        '$' :: rest ->
+            case readUntil [ '$' ] rest [] of
+                Just ( inner, after ) ->
+                    inlineScan after [] (Math.inline inner :: flushText textRev nodes)
+
+                Nothing ->
+                    inlineScan rest ('$' :: textRev) nodes
 
         c :: rest ->
             inlineScan rest (c :: textRev) nodes

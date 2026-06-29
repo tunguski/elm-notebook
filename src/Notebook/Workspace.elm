@@ -35,7 +35,10 @@ import Notebook.Outline as Outline
 import Notebook.Pivot as Pivot
 import Notebook.Reference as Reference
 import Notebook.Serialize as Serialize
+import Notebook.Share as Share
+import Notebook.Slides as Slides
 import Notebook.Suggest as Suggest exposing (Lesson, Suggestion)
+import Notebook.Templates as Templates
 import Notebook.Value as Value
 import Notebook.View as NbView
 import Set exposing (Set)
@@ -55,9 +58,15 @@ type alias NbDoc =
     , profiles : Set Int
     , pivots : Dict Int Pivot.Spec
     , corrs : Set Int
+    , heats : Set Int
+    , footers : Set Int
     , paste : Maybe ( String, String )
     , find : Maybe ( String, String )
     , ref : Maybe String
+    , share : Maybe String
+    , templates : Bool
+    , slideshow : Bool
+    , slide : Int
     , report : Bool
     , past : List Doc
     , future : List Doc
@@ -145,6 +154,12 @@ cellIdsFrom id doc =
         |> Set.fromList
 
 
+{-| How many presentation slides the notebook splits into. -}
+slideCount : Doc -> Int
+slideCount doc =
+    List.length (Slides.slides doc)
+
+
 {-| A starting pivot spec derived from a cell's table value (or an empty one). -}
 pivotSpecFor : Int -> NbDoc -> Pivot.Spec
 pivotSpecFor id nb =
@@ -185,6 +200,8 @@ type NbMsg
     | SetPivotValue Int String
     | SetPivotAgg Int String
     | SetCorr Int Bool
+    | ToggleHeat Int Bool
+    | ToggleFooter Int Bool
     | OpenImport
     | SetImportName String
     | SetImportText String
@@ -208,6 +225,16 @@ type NbMsg
     | InsertBelow Int
     | RunAbove Int
     | RunBelow Int
+    | ToggleSlides
+    | NextSlide
+    | PrevSlide
+    | OpenShare
+    | SetShareInput String
+    | LoadShared
+    | CloseShare
+    | OpenTemplates
+    | CloseTemplates
+    | LoadTemplate String
     | InsertName String
     | SetInputValue Int String
     | SetInputName Int String
@@ -236,7 +263,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, paste = Nothing, find = Nothing, ref = Nothing, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, heats = Set.empty, footers = Set.empty, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -253,9 +280,15 @@ empty =
     , profiles = Set.empty
     , pivots = Dict.empty
     , corrs = Set.empty
+    , heats = Set.empty
+    , footers = Set.empty
     , paste = Nothing
     , find = Nothing
     , ref = Nothing
+    , share = Nothing
+    , templates = False
+    , slideshow = False
+    , slide = 0
     , report = False
     , past = []
     , future = []
@@ -278,9 +311,15 @@ examples =
     , profiles = Set.empty
     , pivots = Dict.empty
     , corrs = Set.empty
+    , heats = Set.empty
+    , footers = Set.empty
     , paste = Nothing
     , find = Nothing
     , ref = Nothing
+    , share = Nothing
+    , templates = False
+    , slideshow = False
+    , slide = 0
     , report = False
     , past = []
     , future = []
@@ -393,6 +432,12 @@ undoable msg =
             True
 
         InsertBelow _ ->
+            True
+
+        LoadTemplate _ ->
+            True
+
+        LoadShared ->
             True
 
         _ ->
@@ -566,6 +611,26 @@ step msg nb =
             else
                 c
 
+        ToggleHeat id flag ->
+            { nb
+                | heats =
+                    if flag then
+                        Set.insert id nb.heats
+
+                    else
+                        Set.remove id nb.heats
+            }
+
+        ToggleFooter id flag ->
+            { nb
+                | footers =
+                    if flag then
+                        Set.insert id nb.footers
+
+                    else
+                        Set.remove id nb.footers
+            }
+
         OpenImport ->
             { nb | paste = Just ( "data", "" ) }
 
@@ -629,6 +694,46 @@ step msg nb =
 
         RunBelow id ->
             { nb | doc = Doc.runAffected (cellIdsFrom id nb.doc) nb.doc, stale = nb.stale }
+
+        ToggleSlides ->
+            { nb | slideshow = not nb.slideshow, slide = 0 }
+
+        NextSlide ->
+            { nb | slide = Basics.min (slideCount nb.doc - 1) (nb.slide + 1) }
+
+        PrevSlide ->
+            { nb | slide = Basics.max 0 (nb.slide - 1) }
+
+        OpenShare ->
+            { nb | share = Just "" }
+
+        SetShareInput token ->
+            { nb | share = Just token }
+
+        CloseShare ->
+            { nb | share = Nothing }
+
+        LoadShared ->
+            case Maybe.andThen Share.decode (Maybe.map stripShareToken nb.share) of
+                Just loaded ->
+                    { nb | doc = Doc.runAll loaded, share = Nothing, stale = Set.empty }
+
+                Nothing ->
+                    nb
+
+        OpenTemplates ->
+            { nb | templates = True }
+
+        CloseTemplates ->
+            { nb | templates = False }
+
+        LoadTemplate id ->
+            case Templates.byId id of
+                Just template ->
+                    { nb | doc = Doc.fromSpec template.cells |> Doc.runAll, templates = False, stale = Set.empty }
+
+                Nothing ->
+                    { nb | templates = False }
 
         ReplaceAll ->
             case nb.find of
@@ -751,6 +856,15 @@ parseControl name =
 
 viewNb : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
 viewNb showCopy env nb =
+    if nb.slideshow then
+        slideshowView env nb
+
+    else
+        editView showCopy env nb
+
+
+editView : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
+editView showCopy env nb =
     div
         [ HA.class
             ("nb-workspace"
@@ -770,6 +884,8 @@ viewNb showCopy env nb =
         , toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
         , findBar nb.find nb.doc
         , refPanel nb.ref
+        , sharePanel nb.share nb.doc
+        , templatePanel nb.templates
         , pastePanel nb.paste
         , section [ HA.class "nb-main" ]
             [ div [ HA.class "nb-notebook" ]
@@ -845,6 +961,10 @@ viewConfig env nb =
     , onInsertBelow = InsertBelow
     , onRunAbove = RunAbove
     , onRunBelow = RunBelow
+    , heatOn = \id -> Set.member id nb.heats
+    , onHeat = ToggleHeat
+    , footerOn = \id -> Set.member id nb.footers
+    , onFooter = ToggleFooter
     }
 
 
@@ -980,6 +1100,9 @@ toolbar showCopy staleCount report canUndo canRedo doc =
         , button [ HA.class "nb-action", HE.onClick OpenImport ] [ Html.i [ HA.class "bi bi-clipboard-data" ] [], text " Import data" ]
         , button [ HA.class "nb-action", HE.onClick OpenFind ] [ Html.i [ HA.class "bi bi-search" ] [], text " Find" ]
         , button [ HA.class "nb-action", HE.onClick OpenRef ] [ Html.i [ HA.class "bi bi-journal-code" ] [], text " Reference" ]
+        , button [ HA.class "nb-action", HE.onClick OpenTemplates ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text " Templates" ]
+        , button [ HA.class "nb-action", HE.onClick ToggleSlides ] [ Html.i [ HA.class "bi bi-easel2" ] [], text " Slides" ]
+        , button [ HA.class "nb-action", HE.onClick OpenShare ] [ Html.i [ HA.class "bi bi-share" ] [], text " Share" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
         , span [ HA.class "nb-action-export" ] [ Export.notebookLinks doc ]
         , reportToggle report
@@ -1103,6 +1226,114 @@ pastePanel paste =
                         ]
                     ]
                 ]
+
+
+{-| Presentation mode: one slide at a time — its cells rendered live — with prev/next navigation, a
+position indicator, and an "Edit" button back to the notebook. -}
+slideshowView : Workspace.EditorEnv -> NbDoc -> Html NbMsg
+slideshowView env nb =
+    let
+        deck =
+            Slides.slides nb.doc
+
+        total =
+            List.length deck
+
+        idx =
+            Basics.max 0 (Basics.min (total - 1) nb.slide)
+
+        current =
+            List.drop idx deck |> List.head
+    in
+    div [ HA.class "nb-slideshow" ]
+        [ section [ HA.class "nb-slide-bar" ]
+            [ button [ HA.class "nb-action", HA.disabled (idx <= 0), HE.onClick PrevSlide ]
+                [ Html.i [ HA.class "bi bi-chevron-left" ] [], text " Prev" ]
+            , span [ HA.class "nb-slide-pos" ]
+                [ text (String.fromInt (idx + 1) ++ " / " ++ String.fromInt (Basics.max 1 total)) ]
+            , button [ HA.class "nb-action", HA.disabled (idx >= total - 1), HE.onClick NextSlide ]
+                [ text "Next ", Html.i [ HA.class "bi bi-chevron-right" ] [] ]
+            , button [ HA.class "nb-action nb-action-report", HE.onClick ToggleSlides ]
+                [ Html.i [ HA.class "bi bi-pencil" ] [], text " Edit" ]
+            ]
+        , case current of
+            Just slide ->
+                div [ HA.class "nb-slide" ]
+                    [ NbView.notebook (viewConfig env nb) (Doc.withCells slide.cells nb.doc) ]
+
+            Nothing ->
+                div [ HA.class "nb-slide nb-slide-empty" ]
+                    [ text "Add a “# heading” to a text cell to start a slide." ]
+        ]
+
+
+{-| Share-by-link: the current notebook encoded as a copyable token, plus a box to paste a token (or
+a `#nb=…` link) and load it over the current notebook. -}
+sharePanel : Maybe String -> Doc -> Html NbMsg
+sharePanel share doc =
+    case share of
+        Nothing ->
+            text ""
+
+        Just token ->
+            section [ HA.class "nb-share" ]
+                [ div [ HA.class "nb-share-head" ]
+                    [ span [ HA.class "nb-share-title" ] [ Html.i [ HA.class "bi bi-share" ] [], text " Share this notebook" ]
+                    , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseShare ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                    ]
+                , span [ HA.class "nb-share-label" ] [ text "Copy this link — it carries the whole notebook:" ]
+                , Html.input
+                    [ HA.class "nb-share-link", HA.attribute "readonly" "readonly", HA.value (Share.link "" doc), HA.attribute "spellcheck" "false" ]
+                    []
+                , span [ HA.class "nb-share-label" ] [ text "…or paste a shared link / token to load it:" ]
+                , Html.input
+                    [ HA.class "nb-share-input", HA.placeholder "#nb=… or token", HA.value token, HA.attribute "spellcheck" "false", HE.onInput SetShareInput ]
+                    []
+                , div [ HA.class "nb-import-actions" ]
+                    [ button [ HA.class "nb-action nb-action-primary", HE.onClick LoadShared ] [ text "Load shared notebook" ]
+                    , button [ HA.class "nb-action", HE.onClick CloseShare ] [ text "Cancel" ]
+                    ]
+                ]
+
+
+{-| The "New from template" picker: each starter template as a card that replaces the notebook's
+cells when chosen. -}
+templatePanel : Bool -> Html NbMsg
+templatePanel open =
+    if not open then
+        text ""
+
+    else
+        section [ HA.class "nb-templates" ]
+            [ div [ HA.class "nb-templates-head" ]
+                [ span [ HA.class "nb-templates-title" ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text " New from template" ]
+                , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseTemplates ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                ]
+            , div [ HA.class "nb-templates-list" ] (List.map templateCard Templates.all)
+            ]
+
+
+templateCard : Templates.Template -> Html NbMsg
+templateCard t =
+    button [ HA.class "nb-template-card", HE.onClick (LoadTemplate t.id) ]
+        [ span [ HA.class "nb-template-name" ] [ text t.title ]
+        , span [ HA.class "nb-template-blurb" ] [ text t.blurb ]
+        ]
+
+
+{-| Reduce a pasted share value — a full `#nb=…` link or a bare token — to just the token. -}
+stripShareToken : String -> String
+stripShareToken raw =
+    let
+        t =
+            String.trim raw
+    in
+    case String.indexes "nb=" t of
+        i :: _ ->
+            String.dropLeft (i + 3) t
+
+        [] ->
+            t
 
 
 lessonBar : String -> Html NbMsg

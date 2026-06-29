@@ -3,7 +3,7 @@ module Notebook.Doc exposing
     , append, appendInput, insertAfter, insertBefore, duplicate, remove, moveUp, moveDown
     , setSource, setKind, setInputValue, setInputName, setInputControl
     , runAll, runThrough, runAffected, clearOutputs
-    , find, lastValue, codeCount, variables, executableIds
+    , find, lastValue, codeCount, variables, executableIds, withCells
     )
 
 {-| The notebook **document**: an ordered list of [`Cell`](Notebook-Cell#Cell)s plus the
@@ -335,3 +335,10 @@ codeCount doc =
 variables : Doc -> List ( String, Value )
 variables doc =
     Kernel.bindings doc.kernel
+
+
+{-| A view of the notebook restricted to a subset of its cells, sharing the same kernel — used to
+render a single presentation slide without disturbing the document. -}
+withCells : List Cell -> Doc -> Doc
+withCells cells doc =
+    { doc | cells = cells }
