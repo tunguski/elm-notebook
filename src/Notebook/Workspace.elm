@@ -28,6 +28,8 @@ import Notebook.Deps as Deps
 import Notebook.Doc as Doc exposing (Doc)
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
 import Notebook.Export as Export
+import Notebook.Format as Format
+import Notebook.GroupBy as GroupBy
 import Notebook.Hint as Hint
 import Notebook.Import as Import
 import Notebook.Kernel as Kernel
@@ -58,6 +60,8 @@ type alias NbDoc =
     , profiles : Set Int
     , pivots : Dict Int Pivot.Spec
     , corrs : Set Int
+    , groups : Dict Int GroupBy.Spec
+    , numFormats : Dict Int Format.Format
     , heats : Set Int
     , footers : Set Int
     , hidden : Dict Int (Set String)
@@ -103,6 +107,7 @@ clearModes id nb =
         , profiles = Set.remove id nb.profiles
         , pivots = Dict.remove id nb.pivots
         , corrs = Set.remove id nb.corrs
+        , groups = Dict.remove id nb.groups
     }
 
 
@@ -172,6 +177,17 @@ pivotSpecFor id nb =
             { row = "", column = "", value = "", agg = Pivot.Sum }
 
 
+{-| A starting group-by spec derived from a cell's table value (or an empty one). -}
+groupSpecFor : Int -> NbDoc -> GroupBy.Spec
+groupSpecFor id nb =
+    case cellValue id nb of
+        Just value ->
+            GroupBy.defaultSpec value
+
+        Nothing ->
+            { key = "", value = "", agg = Pivot.Sum }
+
+
 {-| The notebook editor's messages (everything the old single-notebook `Main` handled). -}
 type NbMsg
     = Edit Int String Int
@@ -201,6 +217,11 @@ type NbMsg
     | SetPivotValue Int String
     | SetPivotAgg Int String
     | SetCorr Int Bool
+    | SetGroup Int Bool
+    | SetGroupKey Int String
+    | SetGroupValue Int String
+    | SetGroupAgg Int String
+    | CycleFormat Int
     | ToggleHeat Int Bool
     | ToggleFooter Int Bool
     | ToggleColumn Int String
@@ -265,7 +286,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, heats = Set.empty, footers = Set.empty, hidden = Dict.empty, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, footers = Set.empty, hidden = Dict.empty, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -282,6 +303,8 @@ empty =
     , profiles = Set.empty
     , pivots = Dict.empty
     , corrs = Set.empty
+    , groups = Dict.empty
+    , numFormats = Dict.empty
     , heats = Set.empty
     , footers = Set.empty
     , hidden = Dict.empty
@@ -314,6 +337,8 @@ examples =
     , profiles = Set.empty
     , pivots = Dict.empty
     , corrs = Set.empty
+    , groups = Dict.empty
+    , numFormats = Dict.empty
     , heats = Set.empty
     , footers = Set.empty
     , hidden = Dict.empty
@@ -614,6 +639,33 @@ step msg nb =
 
             else
                 c
+
+        SetGroup id flag ->
+            let
+                c =
+                    clearModes id nb
+            in
+            if flag then
+                { c | groups = Dict.insert id (groupSpecFor id nb) c.groups }
+
+            else
+                c
+
+        SetGroupKey id colName ->
+            { nb | groups = Dict.update id (Maybe.map (GroupBy.withKey colName)) nb.groups }
+
+        SetGroupValue id colName ->
+            { nb | groups = Dict.update id (Maybe.map (GroupBy.withValue colName)) nb.groups }
+
+        SetGroupAgg id aggName ->
+            { nb | groups = Dict.update id (Maybe.map (GroupBy.withAgg (Pivot.aggFromString aggName))) nb.groups }
+
+        CycleFormat id ->
+            let
+                cur =
+                    Dict.get id nb.numFormats |> Maybe.withDefault Format.Auto
+            in
+            { nb | numFormats = Dict.insert id (Format.next cur) nb.numFormats }
 
         ToggleHeat id flag ->
             { nb
@@ -985,6 +1037,13 @@ viewConfig env nb =
     , onFooter = ToggleFooter
     , hiddenCols = \id -> Dict.get id nb.hidden |> Maybe.withDefault Set.empty
     , onToggleCol = ToggleColumn
+    , groupOf = \id -> Dict.get id nb.groups
+    , onGroup = SetGroup
+    , onGroupKey = SetGroupKey
+    , onGroupValue = SetGroupValue
+    , onGroupAgg = SetGroupAgg
+    , numFormat = \id -> Dict.get id nb.numFormats |> Maybe.withDefault Format.Auto
+    , onNumFormat = CycleFormat
     }
 
 

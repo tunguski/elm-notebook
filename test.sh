@@ -24,4 +24,5 @@ $ELM test "$P/test/NotebookTest.elm" \
   "$P/src/Notebook/Chart.elm" "$P/src/Notebook/Csv.elm" "$P/src/Notebook/Serialize.elm" \
   "$P/vendor/Workspace/Types.elm" "$P/vendor/Workspace/Table.elm" "$P/src/Notebook/Export.elm" \
   "$P/src/Notebook/Deps.elm" "$P/src/Notebook/Hint.elm" "$P/src/Notebook/Profile.elm" "$P/src/Notebook/Import.elm" "$P/src/Notebook/Complete.elm" "$P/src/Notebook/Pivot.elm" "$P/src/Notebook/Correlation.elm" "$P/src/Notebook/Outline.elm" "$P/src/Notebook/Reference.elm" \
-  "$P/src/Notebook/Heatmap.elm" "$P/src/Notebook/Sparkline.elm" "$P/src/Notebook/Slides.elm" "$P/src/Notebook/Share.elm" "$P/src/Notebook/Math.elm" "$P/src/Notebook/Templates.elm"
+  "$P/src/Notebook/Heatmap.elm" "$P/src/Notebook/Sparkline.elm" "$P/src/Notebook/Slides.elm" "$P/src/Notebook/Share.elm" "$P/src/Notebook/Math.elm" "$P/src/Notebook/Templates.elm" \
+  "$P/src/Notebook/Format.elm" "$P/src/Notebook/GroupBy.elm"

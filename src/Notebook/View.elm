@@ -24,6 +24,8 @@ import Notebook.Chart as Chart exposing (ChartKind)
 import Notebook.Complete as Complete
 import Notebook.Correlation as Correlation
 import Notebook.Doc exposing (Doc)
+import Notebook.Format as Format
+import Notebook.GroupBy as GroupBy
 import Notebook.Heatmap as Heatmap
 import Notebook.Math as Math
 import Notebook.Outline exposing (Heading)
@@ -92,6 +94,13 @@ type alias Config msg =
     , onFooter : Int -> Bool -> msg
     , hiddenCols : Int -> Set String
     , onToggleCol : Int -> String -> msg
+    , groupOf : Int -> Maybe GroupBy.Spec
+    , onGroup : Int -> Bool -> msg
+    , onGroupKey : Int -> String -> msg
+    , onGroupValue : Int -> String -> msg
+    , onGroupAgg : Int -> String -> msg
+    , numFormat : Int -> Format.Format
+    , onNumFormat : Int -> msg
     }
 
 
@@ -607,14 +616,19 @@ renderOutput config cell value =
                 pivotView config cell value spec
 
             Nothing ->
-                if config.isCorr cell.id then
-                    correlationView value
+                case config.groupOf cell.id of
+                    Just gspec ->
+                        groupView config cell value gspec
 
-                else if config.isProfile cell.id then
-                    profilePanel value
+                    Nothing ->
+                        if config.isCorr cell.id then
+                            correlationView value
 
-                else
-                    chartOrTable config cell value
+                        else if config.isProfile cell.id then
+                            profilePanel value
+
+                        else
+                            chartOrTable config cell value
 
     else
         chartOrTable config cell value
@@ -677,6 +691,41 @@ pivotView config cell value spec =
                                 :: List.map (\c -> td [ HA.class "nb-prof-n" ] [ text c ]) r.cells
                             )
                     )
+                    grid.rows
+                )
+            ]
+        ]
+
+
+{-| A one-dimensional group-by of the table: key / value / aggregation pickers plus the grouped
+summary grid (one row per distinct key, with its count and the aggregate). -}
+groupView : Config msg -> Cell -> Value -> GroupBy.Spec -> Html msg
+groupView config cell value spec =
+    let
+        cols =
+            Value.tableColumns value
+
+        grid =
+            GroupBy.group spec value
+
+        pick labelText options selected onPick =
+            Html.label [ HA.class "nb-pivot-field" ]
+                [ span [ HA.class "nb-pivot-label" ] [ text labelText ]
+                , Html.select [ HA.class "nb-chart-col", HE.onInput onPick ]
+                    (List.map (\o -> Html.option [ HA.value o, HA.selected (o == selected) ] [ text o ]) options)
+                ]
+    in
+    div [ HA.class "nb-pivot" ]
+        [ div [ HA.class "nb-pivot-controls" ]
+            [ pick "Group by" cols spec.key (config.onGroupKey cell.id)
+            , pick "Value" cols spec.value (config.onGroupValue cell.id)
+            , pick "" (List.map Pivot.aggLabel Pivot.aggs) (Pivot.aggLabel spec.agg) (config.onGroupAgg cell.id)
+            ]
+        , wrapTable
+            [ thead [] [ tr [] (List.map (\h -> th [] [ text h ]) grid.columns) ]
+            , tbody []
+                (List.map
+                    (\r -> tr [] (List.map (\cellTxt -> td [ HA.class "nb-prof-n" ] [ text cellTxt ]) r))
                     grid.rows
                 )
             ]
@@ -832,6 +881,9 @@ interactiveTable config cell value =
         hidden =
             config.hiddenCols cell.id
 
+        fmt =
+            config.numFormat cell.id
+
         visibleCols =
             List.filter (\c -> not (Set.member c hidden)) cols
 
@@ -864,7 +916,7 @@ interactiveTable config cell value =
 
         footRows =
             if foot then
-                [ summaryFooter numCols visibleCols sorted ]
+                [ summaryFooter fmt numCols visibleCols sorted ]
 
             else
                 []
@@ -890,9 +942,14 @@ interactiveTable config cell value =
 
               else
                 tableChip "Σ Summary" foot (config.onFooter cell.id (not foot))
+            , if List.isEmpty numCols then
+                text ""
+
+              else
+                tableChip (Format.label fmt) (fmt /= Format.Auto) (config.onNumFormat cell.id)
             ]
         , columnToggles config cell cols hidden
-        , wrapTable ([ header, tbody [] (List.map (dataRow heat ranges visibleCols) shown) ] ++ footRows)
+        , wrapTable ([ header, tbody [] (List.map (dataRow fmt heat ranges visibleCols) shown) ] ++ footRows)
         , if total > tableCap then
             button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
                 [ text
@@ -969,24 +1026,31 @@ columnToggles config cell cols hidden =
             )
 
 
-{-| A data row whose numeric cells are heat-shaded (when `heat` is on) by their column's range. -}
-dataRow : Bool -> List ( String, ( Float, Float ) ) -> List String -> Value -> Html msg
-dataRow heat ranges cols row =
-    tr [] (List.map (heatCell heat ranges row) cols)
+{-| A data row whose numeric cells are formatted (per the table's number format) and heat-shaded
+(when `heat` is on) by their column's range. -}
+dataRow : Format.Format -> Bool -> List ( String, ( Float, Float ) ) -> List String -> Value -> Html msg
+dataRow fmt heat ranges cols row =
+    tr [] (List.map (heatCell fmt heat ranges row) cols)
 
 
-heatCell : Bool -> List ( String, ( Float, Float ) ) -> Value -> String -> Html msg
-heatCell heat ranges row col =
-    let
-        content =
-            cellHtml (Value.fieldOf col row)
-    in
-    case ( heat, lookupRange col ranges, Value.fieldOf col row ) of
-        ( True, Just rg, Just (VNum n) ) ->
-            td [ HA.style "background" (Heatmap.color rg n) ] [ content ]
+heatCell : Format.Format -> Bool -> List ( String, ( Float, Float ) ) -> Value -> String -> Html msg
+heatCell fmt heat ranges row col =
+    case Value.fieldOf col row of
+        Just (VNum n) ->
+            td (numCellAttrs heat ranges col n) [ text (Format.format fmt n) ]
+
+        maybeOther ->
+            td [] [ cellHtml maybeOther ]
+
+
+numCellAttrs : Bool -> List ( String, ( Float, Float ) ) -> String -> Float -> List (Html.Attribute msg)
+numCellAttrs heat ranges col n =
+    case ( heat, lookupRange col ranges ) of
+        ( True, Just rg ) ->
+            [ HA.class "nb-num-cell", HA.style "background" (Heatmap.color rg n) ]
 
         _ ->
-            td [] [ content ]
+            [ HA.class "nb-num-cell" ]
 
 
 lookupRange : String -> List ( String, ( Float, Float ) ) -> Maybe ( Float, Float )
@@ -1018,17 +1082,17 @@ columnNums col rows =
         rows
 
 
-{-| A two-line table footer: the sum (Σ) and mean (x̄) of every numeric column. -}
-summaryFooter : List String -> List String -> List Value -> Html msg
-summaryFooter numCols cols rows =
+{-| A two-line table footer: the sum (Σ) and mean (x̄) of every numeric column, in the table's format. -}
+summaryFooter : Format.Format -> List String -> List String -> List Value -> Html msg
+summaryFooter fmt numCols cols rows =
     Html.tfoot []
-        [ footerRow "Σ" List.sum numCols cols rows
-        , footerRow "x̄" meanOf numCols cols rows
+        [ footerRow fmt "Σ" List.sum numCols cols rows
+        , footerRow fmt "x̄" meanOf numCols cols rows
         ]
 
 
-footerRow : String -> (List Float -> Float) -> List String -> List String -> List Value -> Html msg
-footerRow lbl agg numCols cols rows =
+footerRow : Format.Format -> String -> (List Float -> Float) -> List String -> List String -> List Value -> Html msg
+footerRow fmt lbl agg numCols cols rows =
     let
         firstNumeric =
             List.head numCols
@@ -1041,10 +1105,10 @@ footerRow lbl agg numCols cols rows =
 
                     shown =
                         if firstNumeric == Just col then
-                            lbl ++ " " ++ round2 (agg nums)
+                            lbl ++ " " ++ Format.format fmt (agg nums)
 
                         else
-                            round2 (agg nums)
+                            Format.format fmt (agg nums)
                 in
                 td [ HA.class "nb-prof-n nb-tfoot-n" ] [ text shown ]
 
@@ -1128,8 +1192,11 @@ chartToggle config cell value =
             corrOn =
                 config.isCorr cell.id
 
+            groupOn =
+                config.groupOf cell.id /= Nothing
+
             special =
-                profileOn || pivotOn || corrOn
+                profileOn || pivotOn || corrOn || groupOn
 
             current =
                 if special then
@@ -1161,6 +1228,7 @@ chartToggle config cell value =
             tableChips =
                 if Value.isTable value then
                     [ chip "Profile" profileOn (config.onProfile cell.id (not profileOn))
+                    , chip "Group" groupOn (config.onGroup cell.id (not groupOn))
                     , chip "Pivot" pivotOn (config.onPivot cell.id (not pivotOn))
                     , chip "Corr" corrOn (config.onCorr cell.id (not corrOn))
                     ]
@@ -1545,6 +1613,7 @@ type Line
     = LHead Int String
     | LItem Int String
     | LQuote String
+    | LTableRow String
     | LText String
     | LBlank
 
@@ -1554,6 +1623,7 @@ type Block
     | BPara (List String)
     | BList (List ( Int, String ))
     | BQuote (List String)
+    | BTable (List String)
 
 
 classifyLine : String -> Line
@@ -1576,6 +1646,9 @@ classifyLine raw =
 
     else if String.startsWith ">" trimmedLeft then
         LQuote (String.trimLeft (String.dropLeft 1 trimmedLeft))
+
+    else if String.startsWith "|" trimmedLeft then
+        LTableRow trimmedLeft
 
     else if String.trim line == "" then
         LBlank
@@ -1629,6 +1702,13 @@ groupBlocks lines pending =
             else
                 flushPending pending ++ groupBlocks rest [ q ]
 
+        ((LTableRow _) as tr_) :: rest ->
+            if isTableBuffer pending then
+                groupBlocks rest (pending ++ [ tr_ ])
+
+            else
+                flushPending pending ++ groupBlocks rest [ tr_ ]
+
         ((LText _) as txt) :: rest ->
             if isTextBuffer pending then
                 groupBlocks rest (pending ++ [ txt ])
@@ -1641,6 +1721,16 @@ isQuoteBuffer : List Line -> Bool
 isQuoteBuffer pending =
     case pending of
         (LQuote _) :: _ ->
+            True
+
+        _ ->
+            False
+
+
+isTableBuffer : List Line -> Bool
+isTableBuffer pending =
+    case pending of
+        (LTableRow _) :: _ ->
             True
 
         _ ->
@@ -1679,6 +1769,9 @@ flushPending pending =
         (LQuote _) :: _ ->
             [ BQuote (List.filterMap quoteText pending) ]
 
+        (LTableRow _) :: _ ->
+            [ BTable (List.filterMap tableText pending) ]
+
         _ ->
             [ BPara (List.filterMap textText pending) ]
 
@@ -1697,6 +1790,16 @@ quoteText : Line -> Maybe String
 quoteText line =
     case line of
         LQuote s ->
+            Just s
+
+        _ ->
+            Nothing
+
+
+tableText : Line -> Maybe String
+tableText line =
+    case line of
+        LTableRow s ->
             Just s
 
         _ ->
@@ -1732,6 +1835,68 @@ blockToHtml block =
 
         BQuote lines ->
             calloutHtml lines
+
+        BTable lines ->
+            tableBlock lines
+
+
+{-| A Markdown pipe table: the first row is the header, a `|---|` separator row is skipped, the rest
+are body rows. Cells are `|`-delimited and rendered with inline Markdown. -}
+tableBlock : List String -> Html msg
+tableBlock lines =
+    case lines of
+        header :: rest ->
+            table [ HA.class "nb-table nb-md-table" ]
+                [ thead [] [ tr [] (List.map (\c -> th [] (inline c)) (rowCells header)) ]
+                , tbody []
+                    (List.filterMap
+                        (\l ->
+                            if isSeparatorRow l then
+                                Nothing
+
+                            else
+                                Just (tr [] (List.map (\c -> td [] (inline c)) (rowCells l)))
+                        )
+                        rest
+                    )
+                ]
+
+        [] ->
+            text ""
+
+
+{-| The cells of a `| a | b |` row: split on `|`, trim, and drop the empty ends. -}
+rowCells : String -> List String
+rowCells line =
+    String.split "|" line |> List.map String.trim |> dropEmptyEnds
+
+
+dropEmptyEnds : List String -> List String
+dropEmptyEnds xs =
+    let
+        noLead =
+            case xs of
+                "" :: rest ->
+                    rest
+
+                _ ->
+                    xs
+    in
+    case List.reverse noLead of
+        "" :: rest ->
+            List.reverse rest
+
+        _ ->
+            noLead
+
+
+isSeparatorRow : String -> Bool
+isSeparatorRow line =
+    let
+        body =
+            String.filter (\c -> c /= '|' && c /= ' ') line
+    in
+    body /= "" && String.all (\c -> c == '-' || c == ':') body
 
 
 {-| A blockquote, or — when its first line is a `[!note]` / `[!tip]` / `[!warning]` /
@@ -1830,7 +1995,35 @@ nestItems items =
                     else
                         [ ul [] (nestItems children) ]
             in
-            li [] (inline body ++ childHtml) :: nestItems remaining
+            li (itemAttrs body) (itemContent body ++ childHtml) :: nestItems remaining
+
+
+{-| A list item's body: a `[ ]` / `[x]` prefix becomes a (read-only) task checkbox, else inline Markdown. -}
+itemContent : String -> List (Html msg)
+itemContent body =
+    if String.startsWith "[ ] " body then
+        taskCheckbox False (String.dropLeft 4 body)
+
+    else if String.startsWith "[x] " body || String.startsWith "[X] " body then
+        taskCheckbox True (String.dropLeft 4 body)
+
+    else
+        inline body
+
+
+itemAttrs : String -> List (Html.Attribute msg)
+itemAttrs body =
+    if String.startsWith "[ ] " body || String.startsWith "[x] " body || String.startsWith "[X] " body then
+        [ HA.class "nb-task-item" ]
+
+    else
+        []
+
+
+taskCheckbox : Bool -> String -> List (Html msg)
+taskCheckbox done rest =
+    input [ HA.type_ "checkbox", HA.checked done, HA.disabled True, HA.class "nb-task" ] []
+        :: inline rest
 
 
 spanWhile : (a -> Bool) -> List a -> ( List a, List a )

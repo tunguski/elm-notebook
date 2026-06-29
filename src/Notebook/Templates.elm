@@ -87,4 +87,5 @@ formatting =
         , ( Markdown, "## Callouts\n\nStart a quote line with a `[!kind]` marker:\n\n> [!note] These boxes draw attention.\n\n> [!tip] Use them for asides and hints.\n\n> [!warning] And for things to watch out for." )
         , ( Markdown, "## Links & images\n\nLink like [the elm-lang repo](https://github.com/tunguski/elm-lang), and embed an image with `![alt](url)`:\n\n![a badge](data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='150' height='30'><rect width='150' height='30' rx='6' fill='%235b6ef5'/><text x='75' y='20' fill='white' font-family='sans-serif' font-size='14' text-anchor='middle'>elm-notebook</text></svg>)" )
         , ( Markdown, "## Math\n\nInline math sits between dollar signs: the area of a circle is $A = \\pi r^2$, and the mean is $\\mu = \\frac{1}{n}\\sum x_i$." )
+        , ( Markdown, "## Tables & checklists\n\nPipe tables render as a grid:\n\n| Fruit | Colour | Qty |\n| --- | --- | --- |\n| Apple | red | 12 |\n| Lime | green | 7 |\n\nAnd task lists become checkboxes:\n\n- [x] write the notebook\n- [ ] chart the results\n- [ ] share the link" )
         ]

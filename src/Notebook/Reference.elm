@@ -75,6 +75,20 @@ entries =
     , Entry "joinWith" "(a -> b -> c) -> (a -> k) -> (b -> k) -> List a -> List b -> List c" "Inner-join two tables on a key, combining matches." "joinWith (\\o c -> { name = c.name }) (\\o -> o.cid) (\\c -> c.id) orders customers"
     , Entry "leftJoinWith" "(a -> b -> c) -> (a -> k) -> (b -> k) -> (a -> c) -> List a -> List b -> List c" "Left-join, keeping unmatched left rows via onMiss." "leftJoinWith (\\o c -> c) (\\o -> o.cid) (\\c -> c.id) (\\o -> o) orders customers"
 
+    -- text
+    , Entry "splitOn" "String -> String -> List String" "Split a string on a separator." "splitOn \",\" text"
+    , Entry "extractNumbers" "String -> List Float" "Pull every number out of a string." "extractNumbers text"
+    , Entry "wordCount" "String -> Int" "How many whitespace-separated words." "wordCount text"
+    , Entry "wordFreq" "String -> List Record" "Word → count table (case-insensitive)." "wordFreq text"
+    , Entry "titleCase" "String -> String" "Capitalise the first letter of each word." "titleCase text"
+
+    -- window / running calculations
+    , Entry "diff" "List Float -> List Float" "Successive differences." "diff numbers"
+    , Entry "movingAvg" "Int -> List Float -> List Float" "Moving average over a window of n." "movingAvg 3 numbers"
+    , Entry "rank" "List Float -> List Int" "Rank of each value (1 = smallest)." "rank numbers"
+    , Entry "cumMax" "List Float -> List Float" "Running maximum." "cumMax numbers"
+    , Entry "cumMin" "List Float -> List Float" "Running minimum." "cumMin numbers"
+
     -- function plots
     , Entry "linspace" "Float -> Float -> Int -> List Float" "n points from lo to hi." "linspace 0 10 50"
     , Entry "plot" "(Float -> Float) -> Float -> Float -> List Float" "Sample a function over a range." "plot (\\x -> x * x) 0 10"

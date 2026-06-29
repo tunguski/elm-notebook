@@ -20,6 +20,8 @@ import Notebook.Correlation as Correlation
 import Notebook.Csv as Csv
 import Notebook.Deps as Deps
 import Notebook.Doc as Doc
+import Notebook.Format as Format
+import Notebook.GroupBy as GroupBy
 import Notebook.Heatmap as Heatmap
 import Notebook.Hint as Hint
 import Notebook.Import as Import
@@ -52,11 +54,15 @@ suite =
         , analysisTests
         , datesTests
         , joinsTests
+        , textTests
+        , windowTests
         , depsTests
         , hintTests
         , interpolateTests
         , profileTests
         , pivotTests
+        , groupByTests
+        , formatTests
         , correlationTests
         , chartKindTests
         , heatmapTests
@@ -540,6 +546,36 @@ joinsTests =
         ]
 
 
+-- TEXT UTILITIES -------------------------------------------------------------
+
+
+textTests : Test
+textTests =
+    describe "text utilities"
+        [ check "splitOn" "splitOn \",\" \"a,b,c\"" (vlist [ s "a", s "b", s "c" ])
+        , check "extractNumbers" "extractNumbers \"order 12 cost 3.5 qty 7\"" (vlist [ n 12, n 3.5, n 7 ])
+        , check "wordCount" "wordCount \"the quick brown fox\"" (n 4)
+        , check "titleCase" "titleCase \"the quick brown\"" (s "The Quick Brown")
+        , check "wordFreq counts repeats"
+            "(nth 0 (wordFreq \"a b a c a\")).count"
+            (n 3)
+        ]
+
+
+-- WINDOW FUNCTIONS -----------------------------------------------------------
+
+
+windowTests : Test
+windowTests =
+    describe "window functions"
+        [ check "diff" "diff [ 1, 3, 6, 10 ]" (vlist [ n 2, n 3, n 4 ])
+        , check "movingAvg" "movingAvg 2 [ 1, 3, 5 ]" (vlist [ n 2, n 4 ])
+        , check "rank" "rank [ 30, 10, 20 ]" (vlist [ n 3, n 1, n 2 ])
+        , check "cumMax" "cumMax [ 1, 3, 2, 5, 4 ]" (vlist [ n 1, n 3, n 3, n 5, n 5 ])
+        , check "cumMin" "cumMin [ 5, 3, 4, 1, 2 ]" (vlist [ n 5, n 3, n 3, n 1, n 1 ])
+        ]
+
+
 -- DEPENDENCY ANALYSIS (reactive execution) -----------------------------------
 
 
@@ -667,6 +703,53 @@ onePair =
         ]
 
 
+-- GROUP-BY + NUMBER FORMATTING -----------------------------------------------
+
+
+groupByTests : Test
+groupByTests =
+    let
+        sales =
+            VList
+                [ VRecord [ ( "dept", s "Eng" ), ( "amt", n 100 ) ]
+                , VRecord [ ( "dept", s "Eng" ), ( "amt", n 120 ) ]
+                , VRecord [ ( "dept", s "Design" ), ( "amt", n 80 ) ]
+                ]
+
+        g =
+            GroupBy.group { key = "dept", value = "amt", agg = Pivot.Sum } sales
+    in
+    describe "group-by aggregation"
+        [ test "columns are key / Count / agg" <|
+            \_ -> Expect.equal [ "dept", "Count", "Sum amt" ] g.columns
+        , test "one row per distinct key with its count and sum" <|
+            \_ -> Expect.equal [ [ "Eng", "2", "220" ], [ "Design", "1", "80" ] ] g.rows
+        , test "defaultSpec picks a text key and a numeric value" <|
+            \_ ->
+                let
+                    d =
+                        GroupBy.defaultSpec sales
+                in
+                Expect.equal ( "dept", "amt" ) ( d.key, d.value )
+        ]
+
+
+formatTests : Test
+formatTests =
+    describe "number formatting"
+        [ test "Fixed2 pads to two decimals" <|
+            \_ -> Format.format Format.Fixed2 3 |> Expect.equal "3.00"
+        , test "Fixed0 rounds to an integer" <|
+            \_ -> Format.format Format.Fixed0 3.7 |> Expect.equal "4"
+        , test "Percent scales by 100 and suffixes" <|
+            \_ -> Format.format Format.Percent 0.25 |> Expect.equal "25.0%"
+        , test "Thousands groups digits" <|
+            \_ -> Format.format Format.Thousands 1234567 |> Expect.equal "1,234,567"
+        , test "next cycles Thousands back to Auto" <|
+            \_ -> Format.next Format.Thousands |> Expect.equal Format.Auto
+        ]
+
+
 -- CORRELATION ----------------------------------------------------------------
 
 
@@ -717,8 +800,10 @@ chartKindTests =
             vlist [ n 1, n 2, n 3 ]
     in
     describe "chart kinds (box · trend)"
-        [ test "Box and Trend have labels" <|
-            \_ -> Expect.equal ( "Box", "Trend" ) ( NbChart.label NbChart.Box, NbChart.label NbChart.Trend )
+        [ test "Box / Trend / Pie have labels" <|
+            \_ -> Expect.equal ( "Box", "Trend", "Pie" ) ( NbChart.label NbChart.Box, NbChart.label NbChart.Trend, NbChart.label NbChart.Pie )
+        , test "any chartable value offers Pie" <|
+            \_ -> Expect.equal True (List.member NbChart.Pie (NbChart.chartableKinds (vlist [ n 1, n 2, n 3 ])))
         , test "a numeric list offers Box but not Trend" <|
             \_ ->
                 Expect.equal ( True, False )

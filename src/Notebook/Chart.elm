@@ -34,6 +34,7 @@ type ChartKind
     | MultiLine
     | Box
     | Trend
+    | Pie
 
 
 {-| A short label for a chart kind. -}
@@ -61,6 +62,9 @@ label kind =
         Trend ->
             "Trend"
 
+        Pie ->
+            "Pie"
+
 
 {-| Can this value be charted at all? -}
 chartable : Value -> Bool
@@ -76,7 +80,7 @@ chartableKinds value =
         multi =
             List.length (numericColumns value) >= 2
     in
-    [ Bar, Line, Histogram, Box ]
+    [ Bar, Line, Histogram, Box, Pie ]
         ++ (if multi then
                 [ Scatter, Trend, MultiLine ]
 
@@ -110,6 +114,9 @@ view kind col value =
 
         Trend ->
             trendChart Chart.defaults value
+
+        Pie ->
+            pieChart Chart.defaults value
 
 
 
@@ -639,3 +646,127 @@ nthF i xs =
 
         Nothing ->
             0
+
+
+
+-- PIE / DONUT ----------------------------------------------------------------
+
+
+{-| A donut chart of a `(label, value)` series, with a colour legend down the right. -}
+pieChart : Chart.Config -> Value -> Svg msg
+pieChart c value =
+    let
+        data =
+            List.filter (\( _, v ) -> v > 0) (series Nothing value)
+
+        total =
+            List.sum (List.map Tuple.second data)
+
+        cx =
+            c.top + plotHeight c / 2 + 6
+
+        cy =
+            c.top + plotHeight c / 2
+
+        radius =
+            plotHeight c / 2 - 2
+
+        wedges =
+            sliceAngles (-pi2) data total
+
+        legend =
+            List.indexedMap (legendRow c) data
+    in
+    if total <= 0 then
+        chartRoot c []
+
+    else
+        chartRoot c (List.indexedMap (wedge cx cy radius) wedges ++ legend)
+
+
+pi2 : Float
+pi2 =
+    pi / 2
+
+
+{-| Turn `(label, value)` pairs into `(label, value, startAngle, endAngle)`, sweeping from `start`. -}
+sliceAngles : Float -> List ( String, Float ) -> Float -> List ( String, Float, Float )
+sliceAngles start data total =
+    case data of
+        [] ->
+            []
+
+        ( lbl, v ) :: rest ->
+            let
+                end =
+                    start + 2 * pi * v / total
+            in
+            ( lbl, start, end ) :: sliceAngles end rest total
+
+
+wedge : Float -> Float -> Float -> Int -> ( String, Float, Float ) -> Svg msg
+wedge cx cy r i ( _, a0, a1 ) =
+    let
+        ( x0, y0 ) =
+            polar cx cy r a0
+
+        ( x1, y1 ) =
+            polar cx cy r a1
+
+        largeArc =
+            if a1 - a0 > pi then
+                "1"
+
+            else
+                "0"
+
+        d =
+            "M " ++ Scale.num cx ++ " " ++ Scale.num cy
+                ++ " L " ++ Scale.num x0 ++ " " ++ Scale.num y0
+                ++ " A " ++ Scale.num r ++ " " ++ Scale.num r ++ " 0 " ++ largeArc ++ " 1 " ++ Scale.num x1 ++ " " ++ Scale.num y1
+                ++ " Z"
+    in
+    Svg.path [ SA.d d, SA.fill (colorAt i), SA.stroke "#ffffff", SA.strokeWidth "1" ] []
+
+
+polar : Float -> Float -> Float -> Float -> ( Float, Float )
+polar cx cy r angle =
+    ( cx + r * cos angle, cy + r * sin angle )
+
+
+colorAt : Int -> String
+colorAt i =
+    let
+        palette =
+            Chart.palette
+    in
+    case List.head (List.drop (modBy (List.length palette) i) palette) of
+        Just color ->
+            color
+
+        Nothing ->
+            "#5b6ef5"
+
+
+legendRow : Chart.Config -> Int -> ( String, Float ) -> Svg msg
+legendRow c i ( lbl, _ ) =
+    let
+        lx =
+            c.width - c.right - 96
+
+        ly =
+            c.top + 6 + toFloat i * 14
+    in
+    Svg.g []
+        [ Svg.rect [ SA.x (Scale.num lx), SA.y (Scale.num ly), SA.width "9", SA.height "9", SA.fill (colorAt i) ] []
+        , Svg.text_ [ SA.x (Scale.num (lx + 14)), SA.y (Scale.num (ly + 8)), SA.fill c.label, SA.fontSize "9" ] [ Svg.text (legendClip lbl) ]
+        ]
+
+
+legendClip : String -> String
+legendClip s =
+    if String.length s > 12 then
+        String.left 11 s ++ "…"
+
+    else
+        s

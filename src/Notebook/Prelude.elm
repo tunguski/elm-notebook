@@ -419,4 +419,78 @@ leftJoinRow combine keyA keyB onMiss right a =
 
 leftJoinWith combine keyA keyB onMiss left right =
     List.map (leftJoinRow combine keyA keyB onMiss right) left
+
+
+splitOn separator s =
+    String.split separator s
+
+
+isNumChar c =
+    Char.isDigit c || c == '.' || c == '-'
+
+
+numericRuns s =
+    String.words (String.map (\\c -> if isNumChar c then c else ' ') s)
+
+
+extractNumbers s =
+    List.filterMap String.toFloat (numericRuns s)
+
+
+wordCount s =
+    List.length (String.words s)
+
+
+capWord w =
+    String.toUpper (String.left 1 w) ++ String.dropLeft 1 w
+
+
+titleCase s =
+    String.join " " (List.map capWord (String.words s))
+
+
+wordFreq s =
+    List.map (\\g -> { word = g.key, count = g.count }) (groupBy (\\w -> w) (String.words (String.toLower s)))
+
+
+diff numbers =
+    List.map2 (\\a b -> b - a) numbers (List.drop 1 numbers)
+
+
+movingAvg n numbers =
+    if List.length numbers < n then
+        []
+
+    else
+        mean (List.take n numbers) :: movingAvg n (List.drop 1 numbers)
+
+
+rank numbers =
+    List.map (\\x -> 1 + List.length (List.filter (\\y -> y < x) numbers)) numbers
+
+
+cumMaxFrom running numbers =
+    case numbers of
+        [] ->
+            []
+
+        x :: rest ->
+            max x running :: cumMaxFrom (max x running) rest
+
+
+cumMax numbers =
+    cumMaxFrom (-1.0e308) numbers
+
+
+cumMinFrom running numbers =
+    case numbers of
+        [] ->
+            []
+
+        x :: rest ->
+            min x running :: cumMinFrom (min x running) rest
+
+
+cumMin numbers =
+    cumMinFrom (1.0e308) numbers
 """
