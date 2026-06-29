@@ -14,6 +14,7 @@ every shipped lesson is executed through a real kernel and asserted to run clean
 import Expect exposing (Expectation)
 import Lang exposing (Value(..))
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Output(..))
+import Notebook.Chart as NbChart
 import Notebook.Complete as Complete
 import Notebook.Correlation as Correlation
 import Notebook.Csv as Csv
@@ -49,12 +50,15 @@ suite =
         , tableTests
         , preludeTests
         , analysisTests
+        , datesTests
+        , joinsTests
         , depsTests
         , hintTests
         , interpolateTests
         , profileTests
         , pivotTests
         , correlationTests
+        , chartKindTests
         , heatmapTests
         , sparklineTests
         , slidesTests
@@ -495,6 +499,47 @@ analysisTests =
         ]
 
 
+-- DATE TOOLKIT ---------------------------------------------------------------
+
+
+datesTests : Test
+datesTests =
+    describe "date toolkit"
+        [ check "year" "year \"2024-03-15\"" (n 2024)
+        , check "month" "month \"2024-03-15\"" (n 3)
+        , check "day" "day \"2024-03-15\"" (n 15)
+        , check "monthName" "monthName \"2024-03-15\"" (s "March")
+        , check "quarter" "quarter \"2024-08-01\"" (n 3)
+        , check "weekday (2000-01-01 was a Saturday)" "weekday \"2000-01-01\"" (s "Saturday")
+        , check "daysBetween a month" "daysBetween \"2024-01-01\" \"2024-01-31\"" (n 30)
+        , check "daysBetween across the 2024 leap day" "daysBetween \"2024-02-28\" \"2024-03-01\"" (n 2)
+        ]
+
+
+-- TABLE JOINS ----------------------------------------------------------------
+
+
+joinsTests : Test
+joinsTests =
+    describe "table joins"
+        [ check "lookup finds a matching row"
+            "case lookup (\\r -> r.id) 2 [ { id = 1, name = \"a\" }, { id = 2, name = \"b\" } ] of\n    Just r ->\n        r.name\n\n    Nothing ->\n        \"none\""
+            (s "b")
+        , check "lookup returns Nothing when absent"
+            "case lookup (\\r -> r.id) 9 [ { id = 1, name = \"a\" } ] of\n    Just r ->\n        r.name\n\n    Nothing ->\n        \"none\""
+            (s "none")
+        , check "joinWith merges matching rows"
+            "List.map (\\r -> r.label) (joinWith (\\o c -> { label = c.name }) (\\o -> o.cid) (\\c -> c.id) [ { cid = 1 }, { cid = 2 } ] [ { id = 1, name = \"Ada\" }, { id = 2, name = \"Bo\" } ])"
+            (vlist [ s "Ada", s "Bo" ])
+        , check "joinWith drops non-matching left rows"
+            "List.length (joinWith (\\o c -> o) (\\o -> o.cid) (\\c -> c.id) [ { cid = 1 }, { cid = 9 } ] [ { id = 1 } ])"
+            (n 1)
+        , check "leftJoinWith keeps unmatched rows via onMiss"
+            "List.map (\\r -> r.name) (leftJoinWith (\\o c -> { name = c.name }) (\\o -> o.cid) (\\c -> c.id) (\\o -> { name = \"?\" }) [ { cid = 1 }, { cid = 9 } ] [ { id = 1, name = \"Ada\" } ])"
+            (vlist [ s "Ada", s "?" ])
+        ]
+
+
 -- DEPENDENCY ANALYSIS (reactive execution) -----------------------------------
 
 
@@ -652,6 +697,36 @@ correlationTests =
                     (VList [ VRecord [ ( "k", n 5 ) ], VRecord [ ( "k", n 5 ) ] ])
                     |> .rows
                     |> Expect.equal [ [ Nothing ] ]
+        ]
+
+
+-- CHART KINDS ----------------------------------------------------------------
+
+
+chartKindTests : Test
+chartKindTests =
+    let
+        table =
+            VList
+                [ VRecord [ ( "x", n 1 ), ( "y", n 2 ) ]
+                , VRecord [ ( "x", n 2 ), ( "y", n 5 ) ]
+                , VRecord [ ( "x", n 3 ), ( "y", n 7 ) ]
+                ]
+
+        numbers =
+            vlist [ n 1, n 2, n 3 ]
+    in
+    describe "chart kinds (box · trend)"
+        [ test "Box and Trend have labels" <|
+            \_ -> Expect.equal ( "Box", "Trend" ) ( NbChart.label NbChart.Box, NbChart.label NbChart.Trend )
+        , test "a numeric list offers Box but not Trend" <|
+            \_ ->
+                Expect.equal ( True, False )
+                    ( List.member NbChart.Box (NbChart.chartableKinds numbers)
+                    , List.member NbChart.Trend (NbChart.chartableKinds numbers)
+                    )
+        , test "a two-numeric-column table offers Trend" <|
+            \_ -> Expect.equal True (List.member NbChart.Trend (NbChart.chartableKinds table))
         ]
 
 

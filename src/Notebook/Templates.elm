@@ -26,7 +26,7 @@ byId wanted =
 {-| Every starter template, in menu order. -}
 all : List Template
 all =
-    [ blank, sales, plotting, stats ]
+    [ blank, sales, plotting, stats, formatting ]
 
 
 blank : Template
@@ -75,4 +75,16 @@ stats =
         , ( Code, "describe sample" )
         , ( Code, "-- the middle of the distribution\nmedian sample" )
         , ( Code, "-- how spread out it is\nstdev sample" )
+        ]
+
+
+formatting : Template
+formatting =
+    Template "formatting"
+        "Formatting guide"
+        "Callouts, links, images and inline math in Markdown cells."
+        [ ( Markdown, "# Formatting guide\n\nText cells render a small Markdown dialect — **bold**, `code`, headings and lists — plus a few extras shown here." )
+        , ( Markdown, "## Callouts\n\nStart a quote line with a `[!kind]` marker:\n\n> [!note] These boxes draw attention.\n\n> [!tip] Use them for asides and hints.\n\n> [!warning] And for things to watch out for." )
+        , ( Markdown, "## Links & images\n\nLink like [the elm-lang repo](https://github.com/tunguski/elm-lang), and embed an image with `![alt](url)`:\n\n![a badge](data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='150' height='30'><rect width='150' height='30' rx='6' fill='%235b6ef5'/><text x='75' y='20' fill='white' font-family='sans-serif' font-size='14' text-anchor='middle'>elm-notebook</text></svg>)" )
+        , ( Markdown, "## Math\n\nInline math sits between dollar signs: the area of a circle is $A = \\pi r^2$, and the mean is $\\mu = \\frac{1}{n}\\sum x_i$." )
         ]

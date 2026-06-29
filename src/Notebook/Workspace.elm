@@ -60,6 +60,7 @@ type alias NbDoc =
     , corrs : Set Int
     , heats : Set Int
     , footers : Set Int
+    , hidden : Dict Int (Set String)
     , paste : Maybe ( String, String )
     , find : Maybe ( String, String )
     , ref : Maybe String
@@ -202,6 +203,7 @@ type NbMsg
     | SetCorr Int Bool
     | ToggleHeat Int Bool
     | ToggleFooter Int Bool
+    | ToggleColumn Int String
     | OpenImport
     | SetImportName String
     | SetImportText String
@@ -263,7 +265,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, heats = Set.empty, footers = Set.empty, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, heats = Set.empty, footers = Set.empty, hidden = Dict.empty, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -282,6 +284,7 @@ empty =
     , corrs = Set.empty
     , heats = Set.empty
     , footers = Set.empty
+    , hidden = Dict.empty
     , paste = Nothing
     , find = Nothing
     , ref = Nothing
@@ -313,6 +316,7 @@ examples =
     , corrs = Set.empty
     , heats = Set.empty
     , footers = Set.empty
+    , hidden = Dict.empty
     , paste = Nothing
     , find = Nothing
     , ref = Nothing
@@ -630,6 +634,20 @@ step msg nb =
                     else
                         Set.remove id nb.footers
             }
+
+        ToggleColumn id col ->
+            let
+                cur =
+                    Dict.get id nb.hidden |> Maybe.withDefault Set.empty
+
+                next =
+                    if Set.member col cur then
+                        Set.remove col cur
+
+                    else
+                        Set.insert col cur
+            in
+            { nb | hidden = Dict.insert id next nb.hidden }
 
         OpenImport ->
             { nb | paste = Just ( "data", "" ) }
@@ -965,6 +983,8 @@ viewConfig env nb =
     , onHeat = ToggleHeat
     , footerOn = \id -> Set.member id nb.footers
     , onFooter = ToggleFooter
+    , hiddenCols = \id -> Dict.get id nb.hidden |> Maybe.withDefault Set.empty
+    , onToggleCol = ToggleColumn
     }
 
 

@@ -322,4 +322,101 @@ plot f lo hi =
 
 plotPoints f lo hi =
     List.map (\\x -> { x = x, y = f x }) (linspace lo hi 50)
+
+
+datePart i s =
+    case List.head (List.drop i (String.split "-" s)) of
+        Just part ->
+            Maybe.withDefault 0 (String.toInt (String.trim part))
+
+        Nothing ->
+            0
+
+
+year s =
+    datePart 0 s
+
+
+month s =
+    datePart 1 s
+
+
+day s =
+    datePart 2 s
+
+
+monthNames =
+    [ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" ]
+
+
+monthName s =
+    nth (month s - 1) monthNames
+
+
+quarter s =
+    (month s - 1) // 3 + 1
+
+
+julianDay s =
+    let
+        y =
+            year s
+
+        m =
+            month s
+
+        a =
+            (14 - m) // 12
+
+        yy =
+            y + 4800 - a
+
+        mm =
+            m + 12 * a - 3
+    in
+    day s + (153 * mm + 2) // 5 + 365 * yy + yy // 4 - yy // 100 + yy // 400 - 32045
+
+
+daysBetween a b =
+    julianDay b - julianDay a
+
+
+weekdayNames =
+    [ "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" ]
+
+
+weekday s =
+    nth (modBy 7 (julianDay s)) weekdayNames
+
+
+lookup keyFn key rows =
+    case rows of
+        [] ->
+            Nothing
+
+        r :: rest ->
+            if keyFn r == key then
+                Just r
+
+            else
+                lookup keyFn key rest
+
+
+joinWith combine keyA keyB left right =
+    List.concatMap
+        (\\a -> List.filterMap (\\b -> if keyA a == keyB b then Just (combine a b) else Nothing) right)
+        left
+
+
+leftJoinRow combine keyA keyB onMiss right a =
+    case lookup keyB (keyA a) right of
+        Just b ->
+            combine a b
+
+        Nothing ->
+            onMiss a
+
+
+leftJoinWith combine keyA keyB onMiss left right =
+    List.map (leftJoinRow combine keyA keyB onMiss right) left
 """

@@ -32,6 +32,7 @@ import Notebook.Profile as Profile
 import Notebook.Sparkline as Sparkline
 import Notebook.Suggest exposing (Suggestion)
 import Notebook.Value as Value
+import Set exposing (Set)
 
 
 {-| The callbacks the host wires up for the notebook's interactive controls. -}
@@ -89,6 +90,8 @@ type alias Config msg =
     , onHeat : Int -> Bool -> msg
     , footerOn : Int -> Bool
     , onFooter : Int -> Bool -> msg
+    , hiddenCols : Int -> Set String
+    , onToggleCol : Int -> String -> msg
     }
 
 
@@ -826,17 +829,23 @@ interactiveTable config cell value =
                 _ ->
                     ""
 
+        hidden =
+            config.hiddenCols cell.id
+
+        visibleCols =
+            List.filter (\c -> not (Set.member c hidden)) cols
+
+        numCols =
+            List.filter (\c -> not (Set.member c hidden)) (Chart.numericColumns value)
+
         header =
             thead []
                 [ tr []
                     (List.map
                         (\c -> th [ HA.class "nb-th-sort", HA.title "Sort by this column", HE.onClick (config.onSort cell.id c) ] [ text (c ++ sortMark c) ])
-                        cols
+                        visibleCols
                     )
                 ]
-
-        numCols =
-            Chart.numericColumns value
 
         heat =
             config.heatOn cell.id
@@ -855,7 +864,7 @@ interactiveTable config cell value =
 
         footRows =
             if foot then
-                [ summaryFooter numCols cols sorted ]
+                [ summaryFooter numCols visibleCols sorted ]
 
             else
                 []
@@ -882,7 +891,8 @@ interactiveTable config cell value =
               else
                 tableChip "Σ Summary" foot (config.onFooter cell.id (not foot))
             ]
-        , wrapTable ([ header, tbody [] (List.map (dataRow heat ranges cols) shown) ] ++ footRows)
+        , columnToggles config cell cols hidden
+        , wrapTable ([ header, tbody [] (List.map (dataRow heat ranges visibleCols) shown) ] ++ footRows)
         , if total > tableCap then
             button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
                 [ text
@@ -920,6 +930,43 @@ tableChip lbl active msg =
         , HE.onClick msg
         ]
         [ text lbl ]
+
+
+{-| A row of chips, one per column, to hide/show it — a hidden column reads struck-through. Shown
+only when a table has more than one column. -}
+columnToggles : Config msg -> Cell -> List String -> Set String -> Html msg
+columnToggles config cell cols hidden =
+    if List.length cols <= 1 then
+        text ""
+
+    else
+        div [ HA.class "nb-col-toggles" ]
+            (span [ HA.class "nb-col-label" ] [ text "columns:" ]
+                :: List.map
+                    (\c ->
+                        button
+                            [ HA.class
+                                ("nb-col-chip"
+                                    ++ (if Set.member c hidden then
+                                            " nb-col-off"
+
+                                        else
+                                            ""
+                                       )
+                                )
+                            , HA.title
+                                (if Set.member c hidden then
+                                    "Show this column"
+
+                                 else
+                                    "Hide this column"
+                                )
+                            , HE.onClick (config.onToggleCol cell.id c)
+                            ]
+                            [ text c ]
+                    )
+                    cols
+            )
 
 
 {-| A data row whose numeric cells are heat-shaded (when `heat` is on) by their column's range. -}
@@ -1497,6 +1544,7 @@ markdownHtml source =
 type Line
     = LHead Int String
     | LItem Int String
+    | LQuote String
     | LText String
     | LBlank
 
@@ -1505,6 +1553,7 @@ type Block
     = BHead Int String
     | BPara (List String)
     | BList (List ( Int, String ))
+    | BQuote (List String)
 
 
 classifyLine : String -> Line
@@ -1524,6 +1573,9 @@ classifyLine raw =
 
     else if String.startsWith "- " trimmedLeft then
         LItem indent (String.dropLeft 2 trimmedLeft)
+
+    else if String.startsWith ">" trimmedLeft then
+        LQuote (String.trimLeft (String.dropLeft 1 trimmedLeft))
 
     else if String.trim line == "" then
         LBlank
@@ -1570,12 +1622,29 @@ groupBlocks lines pending =
             else
                 flushPending pending ++ groupBlocks rest [ item ]
 
+        ((LQuote _) as q) :: rest ->
+            if isQuoteBuffer pending then
+                groupBlocks rest (pending ++ [ q ])
+
+            else
+                flushPending pending ++ groupBlocks rest [ q ]
+
         ((LText _) as txt) :: rest ->
             if isTextBuffer pending then
                 groupBlocks rest (pending ++ [ txt ])
 
             else
                 flushPending pending ++ groupBlocks rest [ txt ]
+
+
+isQuoteBuffer : List Line -> Bool
+isQuoteBuffer pending =
+    case pending of
+        (LQuote _) :: _ ->
+            True
+
+        _ ->
+            False
 
 
 isItemBuffer : List Line -> Bool
@@ -1607,6 +1676,9 @@ flushPending pending =
         (LItem _ _) :: _ ->
             [ BList (List.filterMap itemPair pending) ]
 
+        (LQuote _) :: _ ->
+            [ BQuote (List.filterMap quoteText pending) ]
+
         _ ->
             [ BPara (List.filterMap textText pending) ]
 
@@ -1616,6 +1688,16 @@ itemPair line =
     case line of
         LItem indent s ->
             Just ( indent, s )
+
+        _ ->
+            Nothing
+
+
+quoteText : Line -> Maybe String
+quoteText line =
+    case line of
+        LQuote s ->
+            Just s
 
         _ ->
             Nothing
@@ -1647,6 +1729,85 @@ blockToHtml block =
 
         BList items ->
             ul [] (nestItems items)
+
+        BQuote lines ->
+            calloutHtml lines
+
+
+{-| A blockquote, or — when its first line is a `[!note]` / `[!tip]` / `[!warning]` /
+`[!important]` / `[!caution]` marker (GitHub-style) — a titled, coloured callout box. -}
+calloutHtml : List String -> Html msg
+calloutHtml lines =
+    case lines of
+        first :: rest ->
+            case calloutKind first of
+                Just ( kind, title ) ->
+                    div [ HA.class ("nb-callout nb-callout-" ++ kind) ]
+                        [ div [ HA.class "nb-callout-title" ] [ text title ]
+                        , div [ HA.class "nb-callout-body" ] [ p [] (inline (String.join " " rest)) ]
+                        ]
+
+                Nothing ->
+                    Html.blockquote [ HA.class "nb-quote" ] [ p [] (inline (String.join " " lines)) ]
+
+        [] ->
+            text ""
+
+
+{-| If a callout's first line is a `[!kind] optional title` marker, the kind and a display title. -}
+calloutKind : String -> Maybe ( String, String )
+calloutKind line =
+    let
+        trimmed =
+            String.trim line
+    in
+    if String.startsWith "[!" trimmed then
+        case readUntil [ ']' ] (String.toList (String.dropLeft 2 trimmed)) [] of
+            Just ( tag, after ) ->
+                let
+                    kind =
+                        String.toLower (String.trim tag)
+
+                    custom =
+                        String.trim (String.fromList after)
+
+                    title =
+                        if custom == "" then
+                            defaultCalloutTitle kind
+
+                        else
+                            custom
+                in
+                if List.member kind [ "note", "tip", "warning", "important", "caution" ] then
+                    Just ( kind, title )
+
+                else
+                    Nothing
+
+            Nothing ->
+                Nothing
+
+    else
+        Nothing
+
+
+defaultCalloutTitle : String -> String
+defaultCalloutTitle kind =
+    case kind of
+        "tip" ->
+            "Tip"
+
+        "warning" ->
+            "Warning"
+
+        "important" ->
+            "Important"
+
+        "caution" ->
+            "Caution"
+
+        _ ->
+            "Note"
 
 
 {-| Build (possibly nested) `<li>`s: items more indented than the current one become a nested
@@ -1737,8 +1898,46 @@ inlineScan chars textRev nodes =
                 Nothing ->
                     inlineScan rest ('$' :: textRev) nodes
 
+        '!' :: '[' :: rest ->
+            case readLinkParts rest of
+                Just ( altText, url, after ) ->
+                    inlineScan after [] (Html.img [ HA.src url, HA.alt altText, HA.class "nb-md-img" ] [] :: flushText textRev nodes)
+
+                Nothing ->
+                    inlineScan ('[' :: rest) ('!' :: textRev) nodes
+
+        '[' :: rest ->
+            case readLinkParts rest of
+                Just ( label, url, after ) ->
+                    inlineScan after [] (a [ HA.href url, HA.target "_blank", HA.class "nb-md-link" ] [ text label ] :: flushText textRev nodes)
+
+                Nothing ->
+                    inlineScan rest ('[' :: textRev) nodes
+
         c :: rest ->
             inlineScan rest (c :: textRev) nodes
+
+
+{-| Read a `label](url)` (the body of a `[label](url)` link or `![alt](url)` image) — the label up
+to `]`, then a parenthesised URL — returning the remaining characters. -}
+readLinkParts : List Char -> Maybe ( String, String, List Char )
+readLinkParts chars =
+    case readUntil [ ']' ] chars [] of
+        Just ( label, afterLabel ) ->
+            case afterLabel of
+                '(' :: rest ->
+                    case readUntil [ ')' ] rest [] of
+                        Just ( url, after ) ->
+                            Just ( label, url, after )
+
+                        Nothing ->
+                            Nothing
+
+                _ ->
+                    Nothing
+
+        Nothing ->
+            Nothing
 
 
 flushText : List Char -> List (Html msg) -> List (Html msg)

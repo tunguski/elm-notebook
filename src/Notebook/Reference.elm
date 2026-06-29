@@ -61,6 +61,20 @@ entries =
     , Entry "zip" "List a -> List b -> List ( a, b )" "Pair two lists elementwise." "zip xs ys"
     , Entry "sortDesc" "List comparable -> List comparable" "Sort descending." "sortDesc numbers"
 
+    -- dates (ISO "YYYY-MM-DD" strings)
+    , Entry "year" "String -> Int" "The year of an ISO date." "year \"2024-03-15\""
+    , Entry "month" "String -> Int" "The month number (1–12) of an ISO date." "month \"2024-03-15\""
+    , Entry "day" "String -> Int" "The day of the month of an ISO date." "day \"2024-03-15\""
+    , Entry "monthName" "String -> String" "The English month name of an ISO date." "monthName \"2024-03-15\""
+    , Entry "weekday" "String -> String" "The weekday name of an ISO date." "weekday \"2024-03-15\""
+    , Entry "quarter" "String -> Int" "The calendar quarter (1–4) of an ISO date." "quarter \"2024-03-15\""
+    , Entry "daysBetween" "String -> String -> Int" "Whole days from one ISO date to another." "daysBetween \"2024-01-01\" \"2024-03-01\""
+
+    -- joining two tables
+    , Entry "lookup" "(a -> k) -> k -> List a -> Maybe a" "The first row whose key matches." "lookup (\\r -> r.id) 3 rows"
+    , Entry "joinWith" "(a -> b -> c) -> (a -> k) -> (b -> k) -> List a -> List b -> List c" "Inner-join two tables on a key, combining matches." "joinWith (\\o c -> { name = c.name }) (\\o -> o.cid) (\\c -> c.id) orders customers"
+    , Entry "leftJoinWith" "(a -> b -> c) -> (a -> k) -> (b -> k) -> (a -> c) -> List a -> List b -> List c" "Left-join, keeping unmatched left rows via onMiss." "leftJoinWith (\\o c -> c) (\\o -> o.cid) (\\c -> c.id) (\\o -> o) orders customers"
+
     -- function plots
     , Entry "linspace" "Float -> Float -> Int -> List Float" "n points from lo to hi." "linspace 0 10 50"
     , Entry "plot" "(Float -> Float) -> Float -> Float -> List Float" "Sample a function over a range." "plot (\\x -> x * x) 0 10"
