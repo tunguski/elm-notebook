@@ -1,4 +1,4 @@
-module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, outlinePanel, valueHtml, markdownHtml, interpolate)
+module Notebook.View exposing (Config, notebook, suggestionsPanel, variablesPanel, errorsPanel, outlinePanel, overviewPanel, valueHtml, markdownHtml, interpolate)
 
 {-| The HTML view of a notebook: syntax-highlighted, auto-growing editors, outputs rendered as
 scalars / records / tables (recursively, so nested tables nest) / headerless 2-D grids / errors,
@@ -24,11 +24,13 @@ import Notebook.Chart as Chart exposing (ChartKind)
 import Notebook.Complete as Complete
 import Notebook.Correlation as Correlation
 import Notebook.Doc exposing (Doc)
+import Notebook.Filter as Filter
 import Notebook.Format as Format
 import Notebook.GroupBy as GroupBy
 import Notebook.Heatmap as Heatmap
 import Notebook.Math as Math
 import Notebook.Outline exposing (Heading)
+import Notebook.Overview as Overview
 import Notebook.Pivot as Pivot
 import Notebook.Profile as Profile
 import Notebook.Sparkline as Sparkline
@@ -101,6 +103,12 @@ type alias Config msg =
     , onGroupAgg : Int -> String -> msg
     , numFormat : Int -> Format.Format
     , onNumFormat : Int -> msg
+    , colFiltersOf : Int -> List Filter.Clause
+    , onAddFilter : Int -> msg
+    , onRemoveFilter : Int -> Int -> msg
+    , onFilterCol : Int -> Int -> String -> msg
+    , onFilterOp : Int -> Int -> String -> msg
+    , onFilterValue : Int -> Int -> String -> msg
     }
 
 
@@ -834,12 +842,18 @@ interactiveTable config cell value =
         filter =
             config.tableFilter cell.id
 
-        filtered =
+        clauses =
+            config.colFiltersOf cell.id
+
+        textFiltered =
             if String.trim filter == "" then
                 itemsOf value
 
             else
                 List.filter (rowMatches (String.toLower filter)) (itemsOf value)
+
+        filtered =
+            Filter.apply clauses textFiltered
 
         sorted =
             case config.tableSort cell.id of
@@ -949,6 +963,7 @@ interactiveTable config cell value =
                 tableChip (Format.label fmt) (fmt /= Format.Auto) (config.onNumFormat cell.id)
             ]
         , columnToggles config cell cols hidden
+        , filterBuilder config cell cols clauses
         , wrapTable ([ header, tbody [] (List.map (dataRow fmt heat ranges visibleCols) shown) ] ++ footRows)
         , if total > tableCap then
             button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
@@ -1024,6 +1039,35 @@ columnToggles config cell cols hidden =
                     )
                     cols
             )
+
+
+{-| The column-filter builder: one row per clause (column · operator · value · remove) plus an
+"+ filter" button. Clauses AND together and combine with the text filter. -}
+filterBuilder : Config msg -> Cell -> List String -> List Filter.Clause -> Html msg
+filterBuilder config cell cols clauses =
+    div [ HA.class "nb-filters" ]
+        (List.indexedMap (filterClause config cell cols) clauses
+            ++ [ button [ HA.class "nb-chip nb-table-chip", HE.onClick (config.onAddFilter cell.id) ]
+                    [ Html.i [ HA.class "bi bi-funnel" ] [], text " filter" ]
+               ]
+        )
+
+
+filterClause : Config msg -> Cell -> List String -> Int -> Filter.Clause -> Html msg
+filterClause config cell cols i clause =
+    div [ HA.class "nb-filter-row" ]
+        [ Html.select [ HA.class "nb-chart-col", HE.onInput (config.onFilterCol cell.id i) ]
+            (Html.option [ HA.value "", HA.selected (clause.col == "") ] [ text "column…" ]
+                :: List.map (\c -> Html.option [ HA.value c, HA.selected (c == clause.col) ] [ text c ]) cols
+            )
+        , Html.select [ HA.class "nb-chart-col", HE.onInput (config.onFilterOp cell.id i) ]
+            (List.map (\o -> Html.option [ HA.value (Filter.opLabel o), HA.selected (o == clause.op) ] [ text (Filter.opLabel o) ]) Filter.ops)
+        , input
+            [ HA.class "nb-filter-value", HA.placeholder "value", HA.value clause.value, HA.attribute "spellcheck" "false", HE.onInput (config.onFilterValue cell.id i) ]
+            []
+        , button [ HA.class "nb-action nb-action-icon", HA.title "Remove filter", HE.onClick (config.onRemoveFilter cell.id i) ]
+            [ Html.i [ HA.class "bi bi-x" ] [] ]
+        ]
 
 
 {-| A data row whose numeric cells are formatted (per the table's number format) and heat-shaded
@@ -1502,6 +1546,33 @@ cellDomId id =
     "nb-cell-" ++ String.fromInt id
 
 
+{-| A compact "Notebook" summary card: cell / variable / error counts and a rough reading time. -}
+overviewPanel : Doc -> Html msg
+overviewPanel doc =
+    let
+        s =
+            Overview.of_ doc
+    in
+    div [ HA.class "nb-overview" ]
+        [ h3 [ HA.class "nb-overview-title" ] [ text "Notebook" ]
+        , overviewRow "Cells" (String.fromInt s.cells)
+        , overviewRow "Code" (String.fromInt s.code)
+        , overviewRow "Text" (String.fromInt s.text)
+        , overviewRow "Variables" (String.fromInt s.variables)
+        , overviewRow "Errors" (String.fromInt s.errors)
+        , overviewRow "Words" (String.fromInt s.words)
+        , overviewRow "Read" (String.fromInt s.readMins ++ " min")
+        ]
+
+
+overviewRow : String -> String -> Html msg
+overviewRow label value =
+    div [ HA.class "nb-overview-row" ]
+        [ span [ HA.class "nb-overview-label" ] [ text label ]
+        , span [ HA.class "nb-overview-val" ] [ text value ]
+        ]
+
+
 {-| The outline: the notebook's Markdown headings as jump links, indented by level. Hidden when
 there are none. -}
 outlinePanel : List Heading -> Html msg
@@ -1606,7 +1677,50 @@ paragraphs, and inline `**bold**` / `` `code` ``. -}
 markdownHtml : String -> Html msg
 markdownHtml source =
     div [ HA.class "nb-md" ]
-        (blocksToHtml (groupBlocks (List.map classifyLine (String.lines source)) []))
+        (blocksToHtml (groupBlocks (classifyAll (String.lines source)) []))
+
+
+{-| Classify every line, but first lift fenced ```` ``` ```` code spans into a single `LCode` line. -}
+classifyAll : List String -> List Line
+classifyAll raws =
+    case raws of
+        [] ->
+            []
+
+        r :: rest ->
+            if isFence r then
+                let
+                    ( codeLines, after ) =
+                        takeUntilFence rest []
+                in
+                LCode (fenceLang r) (String.join "\n" codeLines) :: classifyAll after
+
+            else
+                classifyLine r :: classifyAll rest
+
+
+isFence : String -> Bool
+isFence line =
+    String.startsWith "```" (String.trimLeft line)
+
+
+fenceLang : String -> String
+fenceLang line =
+    String.trim (String.dropLeft 3 (String.trimLeft line))
+
+
+takeUntilFence : List String -> List String -> ( List String, List String )
+takeUntilFence raws acc =
+    case raws of
+        [] ->
+            ( List.reverse acc, [] )
+
+        r :: rest ->
+            if isFence r then
+                ( List.reverse acc, rest )
+
+            else
+                takeUntilFence rest (r :: acc)
 
 
 type Line
@@ -1614,6 +1728,8 @@ type Line
     | LItem Int String
     | LQuote String
     | LTableRow String
+    | LCode String String
+    | LHr
     | LText String
     | LBlank
 
@@ -1624,6 +1740,8 @@ type Block
     | BList (List ( Int, String ))
     | BQuote (List String)
     | BTable (List String)
+    | BCode String String
+    | BHr
 
 
 classifyLine : String -> Line
@@ -1650,11 +1768,24 @@ classifyLine raw =
     else if String.startsWith "|" trimmedLeft then
         LTableRow trimmedLeft
 
+    else if isHrLine trimmedLeft then
+        LHr
+
     else if String.trim line == "" then
         LBlank
 
     else
         LText line
+
+
+{-| A horizontal rule: a line of three or more `-`, `*` or `_` (and nothing else). -}
+isHrLine : String -> Bool
+isHrLine s =
+    let
+        t =
+            String.trim s
+    in
+    String.length t >= 3 && (String.all (\c -> c == '-') t || String.all (\c -> c == '*') t || String.all (\c -> c == '_') t)
 
 
 countHashes : String -> Int
@@ -1684,6 +1815,12 @@ groupBlocks lines pending =
 
         (LHead level body) :: rest ->
             flushPending pending ++ (BHead level body :: groupBlocks rest [])
+
+        (LCode lang code) :: rest ->
+            flushPending pending ++ (BCode lang code :: groupBlocks rest [])
+
+        LHr :: rest ->
+            flushPending pending ++ (BHr :: groupBlocks rest [])
 
         LBlank :: rest ->
             flushPending pending ++ groupBlocks rest []
@@ -1838,6 +1975,29 @@ blockToHtml block =
 
         BTable lines ->
             tableBlock lines
+
+        BCode lang code ->
+            codeBlock lang code
+
+        BHr ->
+            Html.hr [ HA.class "nb-md-hr" ] []
+
+
+{-| A fenced code block — highlighted with the editor's Elm highlighter for `elm` (or no language),
+else shown verbatim. -}
+codeBlock : String -> String -> Html msg
+codeBlock lang code =
+    if lang == "" || lang == "elm" then
+        Html.pre [ HA.class "nb-md-code" ]
+            [ Html.code [] (List.map highlightSeg (Highlight.segments code)) ]
+
+    else
+        Html.pre [ HA.class "nb-md-code" ] [ Html.code [] [ text code ] ]
+
+
+highlightSeg : ( String, String ) -> Html msg
+highlightSeg ( cls, txt ) =
+    span [ HA.class ("ce-" ++ cls) ] [ text txt ]
 
 
 {-| A Markdown pipe table: the first row is the header, a `|---|` separator row is skipped, the rest
@@ -2082,6 +2242,22 @@ inlineScan chars textRev nodes =
 
                 Nothing ->
                     inlineScan rest ('`' :: textRev) nodes
+
+        '~' :: '~' :: rest ->
+            case readUntil [ '~', '~' ] rest [] of
+                Just ( inner, after ) ->
+                    inlineScan after [] (Html.del [] [ text inner ] :: flushText textRev nodes)
+
+                Nothing ->
+                    inlineScan rest ('~' :: '~' :: textRev) nodes
+
+        '=' :: '=' :: rest ->
+            case readUntil [ '=', '=' ] rest [] of
+                Just ( inner, after ) ->
+                    inlineScan after [] (Html.mark [] [ text inner ] :: flushText textRev nodes)
+
+                Nothing ->
+                    inlineScan rest ('=' :: '=' :: textRev) nodes
 
         '$' :: rest ->
             case readUntil [ '$' ] rest [] of

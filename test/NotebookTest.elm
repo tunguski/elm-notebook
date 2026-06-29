@@ -20,9 +20,11 @@ import Notebook.Correlation as Correlation
 import Notebook.Csv as Csv
 import Notebook.Deps as Deps
 import Notebook.Doc as Doc
+import Notebook.Filter as Filter
 import Notebook.Format as Format
 import Notebook.GroupBy as GroupBy
 import Notebook.Heatmap as Heatmap
+import Notebook.Overview as Overview
 import Notebook.Hint as Hint
 import Notebook.Import as Import
 import Set
@@ -56,6 +58,7 @@ suite =
         , joinsTests
         , textTests
         , windowTests
+        , statsTests
         , depsTests
         , hintTests
         , interpolateTests
@@ -63,6 +66,8 @@ suite =
         , pivotTests
         , groupByTests
         , formatTests
+        , filterTests
+        , overviewTests
         , correlationTests
         , chartKindTests
         , heatmapTests
@@ -576,6 +581,21 @@ windowTests =
         ]
 
 
+-- STATISTICS -----------------------------------------------------------------
+
+
+statsTests : Test
+statsTests =
+    describe "statistics prelude"
+        [ check "zscore of the mean is 0" "zscore 4 [ 2, 4, 6 ]" (n 0)
+        , check "iqr" "iqr [ 1, 2, 3, 4, 5 ]" (n 2)
+        , check "outliers flags a far value" "outliers [ 1, 2, 3, 4, 100 ]" (vlist [ n 100 ])
+        , check "mode picks the most frequent" "mode [ 1, 2, 2, 3, 2 ]" (n 2)
+        , test "rsquared of a perfect line is 1" (\_ -> evalApprox "rsquared [ 1, 2, 3 ] [ 2, 4, 6 ]" 1.0)
+        , check "standardize keeps the length" "List.length (standardize [ 1, 2, 3, 4 ])" (n 4)
+        ]
+
+
 -- DEPENDENCY ANALYSIS (reactive execution) -----------------------------------
 
 
@@ -750,6 +770,52 @@ formatTests =
         ]
 
 
+-- COLUMN FILTERS + OVERVIEW --------------------------------------------------
+
+
+filterTests : Test
+filterTests =
+    let
+        rows =
+            [ VRecord [ ( "dept", s "Eng" ), ( "salary", n 100 ) ]
+            , VRecord [ ( "dept", s "Design" ), ( "salary", n 80 ) ]
+            , VRecord [ ( "dept", s "Eng" ), ( "salary", n 120 ) ]
+            ]
+    in
+    describe "column filters"
+        [ test "contains keeps matching rows" <|
+            \_ -> List.length (Filter.apply [ { col = "dept", op = Filter.Contains, value = "eng" } ] rows) |> Expect.equal 2
+        , test "> filters numerically" <|
+            \_ -> List.length (Filter.apply [ { col = "salary", op = Filter.Gt, value = "90" } ] rows) |> Expect.equal 2
+        , test "an empty clause is a no-op" <|
+            \_ -> List.length (Filter.apply [ Filter.blank ] rows) |> Expect.equal 3
+        , test "two clauses AND together" <|
+            \_ ->
+                List.length
+                    (Filter.apply
+                        [ { col = "dept", op = Filter.Eq, value = "Eng" }, { col = "salary", op = Filter.Gt, value = "110" } ]
+                        rows
+                    )
+                    |> Expect.equal 1
+        ]
+
+
+overviewTests : Test
+overviewTests =
+    let
+        st =
+            Overview.of_ (Doc.fromSpec [ ( Markdown, "# Title\n\nsome words here" ), ( Code, "x = 1" ), ( Code, "x + 1" ) ] |> Doc.runAll)
+    in
+    describe "notebook overview"
+        [ test "counts cells by kind" <|
+            \_ -> Expect.equal ( 3, 2, 1 ) ( st.cells, st.code, st.text )
+        , test "counts words of prose" <|
+            \_ -> Expect.equal True (st.words >= 5)
+        , test "reading time is at least one minute" <|
+            \_ -> Expect.equal True (st.readMins >= 1)
+        ]
+
+
 -- CORRELATION ----------------------------------------------------------------
 
 
@@ -802,8 +868,12 @@ chartKindTests =
     describe "chart kinds (box · trend)"
         [ test "Box / Trend / Pie have labels" <|
             \_ -> Expect.equal ( "Box", "Trend", "Pie" ) ( NbChart.label NbChart.Box, NbChart.label NbChart.Trend, NbChart.label NbChart.Pie )
-        , test "any chartable value offers Pie" <|
-            \_ -> Expect.equal True (List.member NbChart.Pie (NbChart.chartableKinds (vlist [ n 1, n 2, n 3 ])))
+        , test "any chartable value offers Pie and Area" <|
+            \_ ->
+                Expect.equal ( True, True )
+                    ( List.member NbChart.Pie (NbChart.chartableKinds (vlist [ n 1, n 2, n 3 ]))
+                    , List.member NbChart.Area (NbChart.chartableKinds (vlist [ n 1, n 2, n 3 ]))
+                    )
         , test "a numeric list offers Box but not Trend" <|
             \_ ->
                 Expect.equal ( True, False )

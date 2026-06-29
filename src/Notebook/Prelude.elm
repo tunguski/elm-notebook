@@ -493,4 +493,59 @@ cumMinFrom running numbers =
 
 cumMin numbers =
     cumMinFrom (1.0e308) numbers
+
+
+standardize numbers =
+    let
+        m =
+            mean numbers
+
+        sd =
+            stdev numbers
+    in
+    List.map (\\x -> if sd == 0 then 0 else (x - m) / sd) numbers
+
+
+zscore x numbers =
+    if stdev numbers == 0 then
+        0
+
+    else
+        (x - mean numbers) / stdev numbers
+
+
+iqr numbers =
+    quantile 0.75 numbers - quantile 0.25 numbers
+
+
+outliers numbers =
+    let
+        q1 =
+            quantile 0.25 numbers
+
+        q3 =
+            quantile 0.75 numbers
+
+        lo =
+            q1 - 1.5 * (q3 - q1)
+
+        hi =
+            q3 + 1.5 * (q3 - q1)
+    in
+    List.filter (\\x -> x < lo || x > hi) numbers
+
+
+rsquared xs ys =
+    corr xs ys * corr xs ys
+
+
+mode numbers =
+    let
+        grouped =
+            groupBy (\\x -> x) numbers
+
+        best =
+            List.foldl (\\g acc -> if g.count > acc.count then g else acc) { key = 0, count = 0, items = [] } grouped
+    in
+    best.key
 """

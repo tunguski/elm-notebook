@@ -569,3 +569,33 @@ a:hover { text-decoration: underline; }
 /* ---- round 6: markdown task lists ---- */
 .nb-task-item { list-style: none; margin-left: -18px; }
 .nb-task { margin-right: 7px; vertical-align: -1px; }
+
+/* ---- round 7: column filter builder ---- */
+.nb-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; }
+.nb-filter-row { display: inline-flex; align-items: center; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 2px 4px 2px 8px; }
+.nb-filter-value { width: 84px; border: 1px solid var(--line); border-radius: 7px; padding: 2px 7px; font-size: 12px; }
+.nb-filter-value:focus { outline: none; border-color: var(--accent); }
+
+/* ---- round 7: command palette ---- */
+.nb-palette { background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; margin: 10px 0; }
+.nb-palette-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.nb-palette-head .bi { color: var(--muted); }
+.nb-palette-search { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; font-size: 13px; }
+.nb-palette-search:focus { outline: none; border-color: var(--accent); }
+.nb-palette-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 3px; }
+.nb-palette-item { text-align: left; background: none; border: 1px solid transparent; border-radius: 7px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+.nb-palette-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---- round 7: overview panel ---- */
+.nb-overview { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; margin-bottom: 14px; }
+.nb-overview-title { margin: 0 0 6px; font-size: 13px; }
+.nb-overview-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 1px 0; }
+.nb-overview-label { color: var(--muted); }
+.nb-overview-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---- round 7: markdown — fenced code, rule, strike, highlight ---- */
+.nb-md-code { background: #1e2430; color: #d7dce5; border-radius: 8px; padding: 10px 13px; overflow-x: auto; margin: 10px 0; font-size: 12.5px; }
+.nb-md-code code { font-family: var(--mono); white-space: pre; }
+.nb-md-hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+.nb-md del { color: var(--muted); }
+.nb-md mark { background: #fff3a0; padding: 0 2px; border-radius: 3px; }

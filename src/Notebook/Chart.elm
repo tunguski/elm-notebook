@@ -35,6 +35,7 @@ type ChartKind
     | Box
     | Trend
     | Pie
+    | Area
 
 
 {-| A short label for a chart kind. -}
@@ -65,6 +66,9 @@ label kind =
         Pie ->
             "Pie"
 
+        Area ->
+            "Area"
+
 
 {-| Can this value be charted at all? -}
 chartable : Value -> Bool
@@ -80,7 +84,7 @@ chartableKinds value =
         multi =
             List.length (numericColumns value) >= 2
     in
-    [ Bar, Line, Histogram, Box, Pie ]
+    [ Bar, Line, Area, Histogram, Box, Pie ]
         ++ (if multi then
                 [ Scatter, Trend, MultiLine ]
 
@@ -117,6 +121,9 @@ view kind col value =
 
         Pie ->
             pieChart Chart.defaults value
+
+        Area ->
+            areaChart Chart.defaults value
 
 
 
@@ -646,6 +653,54 @@ nthF i xs =
 
         Nothing ->
             0
+
+
+
+-- AREA -----------------------------------------------------------------------
+
+
+{-| A filled area chart of a `(label, value)` series (X is the category index). -}
+areaChart : Chart.Config -> Value -> Svg msg
+areaChart c value =
+    let
+        data =
+            series Nothing value
+
+        count =
+            List.length data
+
+        yS =
+            Scale.linear (Scale.niceBounds (List.map Tuple.second data)) ( c.top + plotHeight c, c.top )
+
+        xS =
+            Scale.linear ( 0, toFloat (Basics.max 1 (count - 1)) ) ( c.left, c.left + plotWidth c )
+
+        pts =
+            List.indexedMap (\i ( _, v ) -> ( Scale.convert xS (toFloat i), Scale.convert yS v )) data
+
+        baseY =
+            Scale.convert yS 0
+
+        polyPts =
+            case ( List.head pts, lastOf pts ) of
+                ( Just ( x0, _ ), Just ( xn, _ ) ) ->
+                    ( x0, baseY ) :: pts ++ [ ( xn, baseY ) ]
+
+                _ ->
+                    pts
+    in
+    chartRoot c
+        (Chart.frame c yS
+            ++ (Svg.polygon [ SA.points (Scale.pointsString polyPts), SA.fill "rgba(91, 110, 245, 0.22)", SA.stroke "none" ] []
+                    :: Chart.polylineOf c.color pts
+                    :: Chart.dotsOf c.color pts
+               )
+        )
+
+
+lastOf : List a -> Maybe a
+lastOf xs =
+    List.head (List.reverse xs)
 
 
 

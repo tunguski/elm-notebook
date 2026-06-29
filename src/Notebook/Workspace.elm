@@ -28,6 +28,7 @@ import Notebook.Deps as Deps
 import Notebook.Doc as Doc exposing (Doc)
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), Output(..))
 import Notebook.Export as Export
+import Notebook.Filter as Filter
 import Notebook.Format as Format
 import Notebook.GroupBy as GroupBy
 import Notebook.Hint as Hint
@@ -65,6 +66,8 @@ type alias NbDoc =
     , heats : Set Int
     , footers : Set Int
     , hidden : Dict Int (Set String)
+    , colFilters : Dict Int (List Filter.Clause)
+    , palette : Maybe String
     , paste : Maybe ( String, String )
     , find : Maybe ( String, String )
     , ref : Maybe String
@@ -188,6 +191,52 @@ groupSpecFor id nb =
             { key = "", value = "", agg = Pivot.Sum }
 
 
+{-| The column-filter clauses currently set on a cell's table. -}
+clausesFor : Int -> NbDoc -> List Filter.Clause
+clausesFor id nb =
+    Dict.get id nb.colFilters |> Maybe.withDefault []
+
+
+updateClause : Int -> (Filter.Clause -> Filter.Clause) -> List Filter.Clause -> List Filter.Clause
+updateClause i f clauses =
+    List.indexedMap
+        (\j c ->
+            if j == i then
+                f c
+
+            else
+                c
+        )
+        clauses
+
+
+removeAt : Int -> List a -> List a
+removeAt i xs =
+    List.indexedMap (\j x -> ( j, x )) xs
+        |> List.filter (\( j, _ ) -> j /= i)
+        |> List.map Tuple.second
+
+
+{-| The actions offered in the command palette, in order; `PaletteRun i` runs the i-th. -}
+paletteActions : List ( String, NbMsg )
+paletteActions =
+    [ ( "Run all", RunAll )
+    , ( "Add code cell", AddCode )
+    , ( "Add text cell", AddMarkdown )
+    , ( "Add input", AddInput )
+    , ( "Clear outputs", Clear )
+    , ( "Find & replace", OpenFind )
+    , ( "Function reference", OpenRef )
+    , ( "Import data", OpenImport )
+    , ( "New from template", OpenTemplates )
+    , ( "Slideshow", ToggleSlides )
+    , ( "Share link", OpenShare )
+    , ( "Toggle report mode", ToggleReport )
+    , ( "Undo", Undo )
+    , ( "Redo", Redo )
+    ]
+
+
 {-| The notebook editor's messages (everything the old single-notebook `Main` handled). -}
 type NbMsg
     = Edit Int String Int
@@ -222,6 +271,15 @@ type NbMsg
     | SetGroupValue Int String
     | SetGroupAgg Int String
     | CycleFormat Int
+    | AddFilter Int
+    | RemoveFilter Int Int
+    | SetFilterCol Int Int String
+    | SetFilterOp Int Int String
+    | SetFilterValue Int Int String
+    | OpenPalette
+    | SetPaletteQuery String
+    | ClosePalette
+    | PaletteRun Int
     | ToggleHeat Int Bool
     | ToggleFooter Int Bool
     | ToggleColumn Int String
@@ -286,7 +344,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, footers = Set.empty, hidden = Dict.empty, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, footers = Set.empty, hidden = Dict.empty, colFilters = Dict.empty, palette = Nothing, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -308,6 +366,8 @@ empty =
     , heats = Set.empty
     , footers = Set.empty
     , hidden = Dict.empty
+    , colFilters = Dict.empty
+    , palette = Nothing
     , paste = Nothing
     , find = Nothing
     , ref = Nothing
@@ -342,6 +402,8 @@ examples =
     , heats = Set.empty
     , footers = Set.empty
     , hidden = Dict.empty
+    , colFilters = Dict.empty
+    , palette = Nothing
     , paste = Nothing
     , find = Nothing
     , ref = Nothing
@@ -667,6 +729,38 @@ step msg nb =
             in
             { nb | numFormats = Dict.insert id (Format.next cur) nb.numFormats }
 
+        AddFilter id ->
+            { nb | colFilters = Dict.insert id (clausesFor id nb ++ [ Filter.blank ]) nb.colFilters }
+
+        RemoveFilter id i ->
+            { nb | colFilters = Dict.insert id (removeAt i (clausesFor id nb)) nb.colFilters }
+
+        SetFilterCol id i name ->
+            { nb | colFilters = Dict.insert id (updateClause i (Filter.withCol name) (clausesFor id nb)) nb.colFilters }
+
+        SetFilterOp id i opName ->
+            { nb | colFilters = Dict.insert id (updateClause i (Filter.withOp (Filter.opFromString opName)) (clausesFor id nb)) nb.colFilters }
+
+        SetFilterValue id i value ->
+            { nb | colFilters = Dict.insert id (updateClause i (Filter.withValue value) (clausesFor id nb)) nb.colFilters }
+
+        OpenPalette ->
+            { nb | palette = Just "" }
+
+        SetPaletteQuery q ->
+            { nb | palette = Just q }
+
+        ClosePalette ->
+            { nb | palette = Nothing }
+
+        PaletteRun i ->
+            case List.head (List.drop i paletteActions) of
+                Just ( _, actionMsg ) ->
+                    updateNb actionMsg { nb | palette = Nothing }
+
+                Nothing ->
+                    { nb | palette = Nothing }
+
         ToggleHeat id flag ->
             { nb
                 | heats =
@@ -954,6 +1048,7 @@ editView showCopy env nb =
         , toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
         , findBar nb.find nb.doc
         , refPanel nb.ref
+        , palettePanel nb.palette
         , sharePanel nb.share nb.doc
         , templatePanel nb.templates
         , pastePanel nb.paste
@@ -972,6 +1067,7 @@ editView showCopy env nb =
               else
                 div [ HA.class "nb-sidebar" ]
                     [ NbView.errorsPanel Run (errorList nb.doc)
+                    , NbView.overviewPanel nb.doc
                     , NbView.outlinePanel (Outline.headings nb.doc)
                     , NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
                     , NbView.variablesPanel InsertName (Doc.variables nb.doc)
@@ -1044,6 +1140,12 @@ viewConfig env nb =
     , onGroupAgg = SetGroupAgg
     , numFormat = \id -> Dict.get id nb.numFormats |> Maybe.withDefault Format.Auto
     , onNumFormat = CycleFormat
+    , colFiltersOf = \id -> clausesFor id nb
+    , onAddFilter = AddFilter
+    , onRemoveFilter = RemoveFilter
+    , onFilterCol = SetFilterCol
+    , onFilterOp = SetFilterOp
+    , onFilterValue = SetFilterValue
     }
 
 
@@ -1179,6 +1281,7 @@ toolbar showCopy staleCount report canUndo canRedo doc =
         , button [ HA.class "nb-action", HE.onClick OpenImport ] [ Html.i [ HA.class "bi bi-clipboard-data" ] [], text " Import data" ]
         , button [ HA.class "nb-action", HE.onClick OpenFind ] [ Html.i [ HA.class "bi bi-search" ] [], text " Find" ]
         , button [ HA.class "nb-action", HE.onClick OpenRef ] [ Html.i [ HA.class "bi bi-journal-code" ] [], text " Reference" ]
+        , button [ HA.class "nb-action", HE.onClick OpenPalette ] [ Html.i [ HA.class "bi bi-command" ] [], text " Actions" ]
         , button [ HA.class "nb-action", HE.onClick OpenTemplates ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text " Templates" ]
         , button [ HA.class "nb-action", HE.onClick ToggleSlides ] [ Html.i [ HA.class "bi bi-easel2" ] [], text " Slides" ]
         , button [ HA.class "nb-action", HE.onClick OpenShare ] [ Html.i [ HA.class "bi bi-share" ] [], text " Share" ]
@@ -1222,6 +1325,40 @@ refEntry entry =
         [ span [ HA.class "nb-ref-name" ] [ text entry.name ]
         , span [ HA.class "nb-ref-doc" ] [ text entry.doc ]
         ]
+
+
+{-| The command palette: a search box over [`paletteActions`](#paletteActions); clicking one runs it
+and closes the palette. -}
+palettePanel : Maybe String -> Html NbMsg
+palettePanel palette =
+    case palette of
+        Nothing ->
+            text ""
+
+        Just query ->
+            let
+                q =
+                    String.toLower (String.trim query)
+
+                shown =
+                    List.indexedMap (\i pair -> ( i, pair )) paletteActions
+                        |> List.filter (\( _, ( label, _ ) ) -> q == "" || String.contains q (String.toLower label))
+            in
+            section [ HA.class "nb-palette" ]
+                [ div [ HA.class "nb-palette-head" ]
+                    [ Html.i [ HA.class "bi bi-command" ] []
+                    , Html.input
+                        [ HA.class "nb-palette-search", HA.placeholder "Type an action…", HA.value query, HA.attribute "spellcheck" "false", HE.onInput SetPaletteQuery ]
+                        []
+                    , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick ClosePalette ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                    ]
+                , div [ HA.class "nb-palette-list" ] (List.map paletteItem shown)
+                ]
+
+
+paletteItem : ( Int, ( String, NbMsg ) ) -> Html NbMsg
+paletteItem ( i, ( label, _ ) ) =
+    button [ HA.class "nb-palette-item", HE.onClick (PaletteRun i) ] [ text label ]
 
 
 {-| The find / replace bar: a query + replacement, a live count of matching cells, and replace-all. -}

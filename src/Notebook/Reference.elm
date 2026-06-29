@@ -82,6 +82,14 @@ entries =
     , Entry "wordFreq" "String -> List Record" "Word → count table (case-insensitive)." "wordFreq text"
     , Entry "titleCase" "String -> String" "Capitalise the first letter of each word." "titleCase text"
 
+    -- distributions & outliers
+    , Entry "standardize" "List Float -> List Float" "Z-scores: (x − mean) / stdev." "standardize numbers"
+    , Entry "zscore" "Float -> List Float -> Float" "How many stdevs x is from the mean." "zscore x numbers"
+    , Entry "iqr" "List Float -> Float" "Inter-quartile range (Q3 − Q1)." "iqr numbers"
+    , Entry "outliers" "List Float -> List Float" "Values beyond 1.5·IQR of the quartiles." "outliers numbers"
+    , Entry "mode" "List Float -> Float" "The most frequent value." "mode numbers"
+    , Entry "rsquared" "List Float -> List Float -> Float" "Coefficient of determination (r²)." "rsquared xs ys"
+
     -- window / running calculations
     , Entry "diff" "List Float -> List Float" "Successive differences." "diff numbers"
     , Entry "movingAvg" "Int -> List Float -> List Float" "Moving average over a window of n." "movingAvg 3 numbers"
