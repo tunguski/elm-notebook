@@ -1,4 +1,4 @@
-module Notebook.Export exposing (valueToTable, cellLinks, notebookLinks, toMarkdown, toElm)
+module Notebook.Export exposing (valueToTable, cellLinks, notebookLinks, toMarkdown, toElm, toHtml)
 
 {-| Turn a cell's [`Lang.Value`](Lang#Value) into the workspace's neutral
 [`Table`](Workspace-Types#Table), so any step's data can be **exported** to CSV / JSON (and, with a
@@ -90,13 +90,116 @@ downloadLink labelText filename mime content =
         [ Html.i [ HA.class "bi bi-download" ] [], text (" " ++ labelText) ]
 
 
-{-| Download links for the whole notebook: a Markdown report and an Elm script. -}
+{-| Download links for the whole notebook: a Markdown report, an Elm script and an HTML report. -}
 notebookLinks : Doc -> Html msg
 notebookLinks doc =
     span [ HA.class "nb-export" ]
         [ downloadLink "Markdown" "notebook.md" "text/markdown" (toMarkdown doc)
         , downloadLink "Elm" "notebook.elm" "text/plain" (toElm doc)
+        , downloadLink "HTML" "notebook.html" "text/html" (toHtml doc)
         ]
+
+
+
+-- NOTEBOOK → HTML ------------------------------------------------------------
+
+
+{-| The notebook as a **self-contained HTML report**: prose cells get light Markdown rendering,
+code cells become `<pre>` blocks, and each output renders as a value or a table. Inline CSS keeps it
+a single openable file. -}
+toHtml : Doc -> String
+toHtml doc =
+    htmlHead
+        ++ (doc.cells |> List.map cellHtml |> String.join "\n")
+        ++ "\n</main>"
+
+
+{-| The HTML preamble. NOTE: this is a *minimal* document — no `<head>`/`<title>`/`<body>` wrapper
+and an unquoted `charset` — on purpose. This string is compiled into the host page's inlined JS, and
+the page's build step post-processes the first `</head>`, `<title>`, `<meta charset="utf-8">`,
+`</body>` and `</html>`; if those appeared here verbatim the build would mangle the script. A bare
+`<!doctype html>` + `<style>` + `<main>` still renders as a self-contained file. -}
+htmlHead : String
+htmlHead =
+    "<!doctype html><meta charset=utf-8><style>"
+        ++ "body{font:15px/1.6 system-ui,sans-serif;color:#1f2733;max-width:820px;margin:32px auto;padding:0 18px}"
+        ++ "h1,h2,h3{line-height:1.25}pre{background:#1e2330;color:#e7ecf6;padding:11px 14px;border-radius:8px;overflow-x:auto;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace}"
+        ++ ".out{background:#f5f7fb;color:#1f2733}.err{background:#fdecea;color:#b3261e}"
+        ++ "table{border-collapse:collapse;margin:8px 0}th,td{border:1px solid #e2e8f2;padding:4px 10px;text-align:left}thead th{background:#eef0fe}"
+        ++ "</style><main>"
+
+
+cellHtml : Cell -> String
+cellHtml cell =
+    case cell.kind of
+        Markdown ->
+            proseHtml cell.source
+
+        _ ->
+            "<pre class=\"code\">" ++ escapeHtml cell.source ++ "</pre>" ++ outputHtml cell.output
+
+
+proseHtml : String -> String
+proseHtml source =
+    source |> String.lines |> List.map lineHtml |> String.join "\n"
+
+
+lineHtml : String -> String
+lineHtml line =
+    let
+        t =
+            String.trimLeft line
+    in
+    if String.startsWith "## " t then
+        "<h3>" ++ escapeHtml (String.dropLeft 3 t) ++ "</h3>"
+
+    else if String.startsWith "# " t then
+        "<h2>" ++ escapeHtml (String.dropLeft 2 t) ++ "</h2>"
+
+    else if String.trim line == "" then
+        ""
+
+    else
+        "<p>" ++ escapeHtml line ++ "</p>"
+
+
+outputHtml : Output -> String
+outputHtml output =
+    case output of
+        OutValue value ->
+            case valueToTable value of
+                Just table ->
+                    htmlTable table
+
+                Nothing ->
+                    "<pre class=\"out\">" ++ escapeHtml (Value.inlineValue value) ++ "</pre>"
+
+        OutError message ->
+            "<pre class=\"err\">⚠ " ++ escapeHtml message ++ "</pre>"
+
+        OutNone ->
+            ""
+
+
+htmlTable : Table -> String
+htmlTable table =
+    let
+        cells tag row =
+            row |> List.map (\c -> "<" ++ tag ++ ">" ++ escapeHtml c ++ "</" ++ tag ++ ">") |> String.concat
+    in
+    "<table><thead><tr>"
+        ++ cells "th" table.headers
+        ++ "</tr></thead><tbody>"
+        ++ (table.rows |> List.map (\r -> "<tr>" ++ cells "td" r ++ "</tr>") |> String.concat)
+        ++ "</tbody></table>"
+
+
+escapeHtml : String -> String
+escapeHtml s =
+    s
+        |> String.replace "&" "&amp;"
+        |> String.replace "<" "&lt;"
+        |> String.replace ">" "&gt;"
 
 
 

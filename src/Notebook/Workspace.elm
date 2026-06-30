@@ -64,6 +64,7 @@ type alias NbDoc =
     , groups : Dict Int GroupBy.Spec
     , numFormats : Dict Int Format.Format
     , heats : Set Int
+    , dataBars : Set Int
     , footers : Set Int
     , hidden : Dict Int (Set String)
     , colFilters : Dict Int (List Filter.Clause)
@@ -80,6 +81,8 @@ type alias NbDoc =
     , future : List Doc
     , active : Maybe Int
     , folded : Set Int
+    , foldedSections : Set Int
+    , dark : Bool
     , lesson : String
     , stale : Set Int
     }
@@ -281,6 +284,7 @@ type NbMsg
     | ClosePalette
     | PaletteRun Int
     | ToggleHeat Int Bool
+    | ToggleBars Int Bool
     | ToggleFooter Int Bool
     | ToggleColumn Int String
     | OpenImport
@@ -289,6 +293,8 @@ type NbMsg
     | DoImport
     | CancelImport
     | ToggleReport
+    | ToggleTheme
+    | FoldSection Int
     | Undo
     | Redo
     | OpenFind
@@ -344,7 +350,7 @@ config =
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, footers = Set.empty, hidden = Dict.empty, colFilters = Dict.empty, palette = Nothing, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, dataBars = Set.empty, footers = Set.empty, hidden = Dict.empty, colFilters = Dict.empty, palette = Nothing, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, foldedSections = Set.empty, dark = False, lesson = "", stale = Set.empty }) Serialize.decoder
 
 
 empty : NbDoc
@@ -364,6 +370,7 @@ empty =
     , groups = Dict.empty
     , numFormats = Dict.empty
     , heats = Set.empty
+    , dataBars = Set.empty
     , footers = Set.empty
     , hidden = Dict.empty
     , colFilters = Dict.empty
@@ -380,6 +387,8 @@ empty =
     , future = []
     , active = Nothing
     , folded = Set.empty
+    , foldedSections = Set.empty
+    , dark = False
     , lesson = ""
     , stale = Set.empty
     }
@@ -400,6 +409,7 @@ examples =
     , groups = Dict.empty
     , numFormats = Dict.empty
     , heats = Set.empty
+    , dataBars = Set.empty
     , footers = Set.empty
     , hidden = Dict.empty
     , colFilters = Dict.empty
@@ -416,6 +426,8 @@ examples =
     , future = []
     , active = Nothing
     , folded = Set.empty
+    , foldedSections = Set.empty
+    , dark = False
     , lesson = "starter"
     , stale = Set.empty
     }
@@ -640,7 +652,7 @@ step msg nb =
             { nb | doc = doc2, stale = Set.fromList (Doc.executableIds doc2) }
 
         LoadLesson lesson ->
-            { nb | doc = Doc.fromSpec lesson.cells |> Doc.runAll, lesson = lesson.id, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, stale = Set.empty }
+            { nb | doc = Doc.fromSpec lesson.cells |> Doc.runAll, lesson = lesson.id, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, folded = Set.empty, foldedSections = Set.empty, stale = Set.empty }
 
         SetChart id maybeKind ->
             let
@@ -771,6 +783,16 @@ step msg nb =
                         Set.remove id nb.heats
             }
 
+        ToggleBars id flag ->
+            { nb
+                | dataBars =
+                    if flag then
+                        Set.insert id nb.dataBars
+
+                    else
+                        Set.remove id nb.dataBars
+            }
+
         ToggleFooter id flag ->
             { nb
                 | footers =
@@ -809,6 +831,19 @@ step msg nb =
 
         ToggleReport ->
             { nb | report = not nb.report }
+
+        ToggleTheme ->
+            { nb | dark = not nb.dark }
+
+        FoldSection id ->
+            { nb
+                | foldedSections =
+                    if Set.member id nb.foldedSections then
+                        Set.remove id nb.foldedSections
+
+                    else
+                        Set.insert id nb.foldedSections
+            }
 
         OpenFind ->
             { nb | find = Just ( "", "" ) }
@@ -880,7 +915,7 @@ step msg nb =
         LoadShared ->
             case Maybe.andThen Share.decode (Maybe.map stripShareToken nb.share) of
                 Just loaded ->
-                    { nb | doc = Doc.runAll loaded, share = Nothing, stale = Set.empty }
+                    { nb | doc = Doc.runAll loaded, share = Nothing, folded = Set.empty, foldedSections = Set.empty, stale = Set.empty }
 
                 Nothing ->
                     nb
@@ -894,7 +929,7 @@ step msg nb =
         LoadTemplate id ->
             case Templates.byId id of
                 Just template ->
-                    { nb | doc = Doc.fromSpec template.cells |> Doc.runAll, templates = False, stale = Set.empty }
+                    { nb | doc = Doc.fromSpec template.cells |> Doc.runAll, templates = False, folded = Set.empty, foldedSections = Set.empty, stale = Set.empty }
 
                 Nothing ->
                     { nb | templates = False }
@@ -1038,6 +1073,7 @@ editView showCopy env nb =
                     else
                         ""
                    )
+                ++ themeClass nb
             )
         ]
         [ if nb.report then
@@ -1129,6 +1165,10 @@ viewConfig env nb =
     , onRunBelow = RunBelow
     , heatOn = \id -> Set.member id nb.heats
     , onHeat = ToggleHeat
+    , barsOn = \id -> Set.member id nb.dataBars
+    , onBars = ToggleBars
+    , sectionFolded = \id -> Set.member id nb.foldedSections
+    , onFoldSection = FoldSection
     , footerOn = \id -> Set.member id nb.footers
     , onFooter = ToggleFooter
     , hiddenCols = \id -> Dict.get id nb.hidden |> Maybe.withDefault Set.empty
@@ -1239,6 +1279,22 @@ reportToggle report =
         ]
 
 
+{-| The extra class that switches the notebook subtree to the dark palette. -}
+themeClass : NbDoc -> String
+themeClass nb =
+    if nb.dark then
+        " nb-theme-dark"
+
+    else
+        ""
+
+
+themeToggle : Html NbMsg
+themeToggle =
+    button [ HA.class "nb-action nb-action-icon", HA.title "Toggle dark mode", HE.onClick ToggleTheme ]
+        [ Html.i [ HA.class "bi bi-circle-half" ] [] ]
+
+
 iconFor : Bool -> String
 iconFor report =
     if report then
@@ -1262,6 +1318,7 @@ toolbar showCopy staleCount report canUndo canRedo doc =
     if report then
         section [ HA.class "nb-actions" ]
             [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
+            , themeToggle
             , reportToggle report
             ]
 
@@ -1287,7 +1344,8 @@ toolbar showCopy staleCount report canUndo canRedo doc =
         , button [ HA.class "nb-action", HE.onClick OpenShare ] [ Html.i [ HA.class "bi bi-share" ] [], text " Share" ]
         , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
         , span [ HA.class "nb-action-export" ] [ Export.notebookLinks doc ]
-        , reportToggle report
+        , themeToggle
+            , reportToggle report
         , if showCopy then
             button [ HA.class "nb-action nb-action-copy", HE.onClick CopyToWorkspaceRequested ]
                 [ Html.i [ HA.class "bi bi-folder-plus" ] [], text " Copy to workspace" ]
@@ -1461,7 +1519,7 @@ slideshowView env nb =
         current =
             List.drop idx deck |> List.head
     in
-    div [ HA.class "nb-slideshow" ]
+    div [ HA.class ("nb-slideshow" ++ themeClass nb) ]
         [ section [ HA.class "nb-slide-bar" ]
             [ button [ HA.class "nb-action", HA.disabled (idx <= 0), HE.onClick PrevSlide ]
                 [ Html.i [ HA.class "bi bi-chevron-left" ] [], text " Prev" ]

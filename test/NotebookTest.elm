@@ -59,6 +59,7 @@ suite =
         , textTests
         , windowTests
         , statsTests
+        , reshapeTests
         , depsTests
         , hintTests
         , interpolateTests
@@ -131,6 +132,22 @@ exportTests =
                 in
                 Expect.equal True
                     (String.contains "module Notebook" elm && String.contains "x = 5" elm && String.contains "out2 =" elm)
+        , test "notebook → HTML is a self-contained document with prose, code and output" <|
+            \_ ->
+                let
+                    html =
+                        Export.toHtml
+                            (Doc.empty |> Doc.append Markdown "# Title" |> Doc.append Code "1 + 2" |> Doc.runAll)
+                in
+                Expect.equal True
+                    (String.contains "<!doctype html>" html
+                        && String.contains "<h2>Title</h2>" html
+                        && String.contains "<pre class=\"code\">" html
+                    )
+        , test "HTML export escapes angle brackets" <|
+            \_ ->
+                Expect.equal True
+                    (String.contains "&lt;b&gt;" (Export.toHtml (Doc.empty |> Doc.append Markdown "<b>hi</b>")))
         ]
 
 
@@ -596,6 +613,20 @@ statsTests =
         ]
 
 
+-- RESHAPING ------------------------------------------------------------------
+
+
+reshapeTests : Test
+reshapeTests =
+    describe "reshaping prelude"
+        [ check "transpose" "transpose [ [ 1, 2, 3 ], [ 4, 5, 6 ] ]" (vlist [ vlist [ n 1, n 4 ], vlist [ n 2, n 5 ], vlist [ n 3, n 6 ] ])
+        , check "topN" "topN 2 [ 3, 1, 4, 1, 5 ]" (vlist [ n 5, n 4 ])
+        , check "bottomN" "bottomN 2 [ 3, 1, 4, 1, 5 ]" (vlist [ n 1, n 1 ])
+        , check "share (as percents)" "List.map (\\x -> round (x * 100)) (share [ 1, 1, 2 ])" (vlist [ n 25, n 25, n 50 ])
+        , check "cumPercent (as percents)" "List.map (\\x -> round (x * 100)) (cumPercent [ 1, 1, 2 ])" (vlist [ n 25, n 50, n 100 ])
+        ]
+
+
 -- DEPENDENCY ANALYSIS (reactive execution) -----------------------------------
 
 
@@ -880,8 +911,22 @@ chartKindTests =
                     ( List.member NbChart.Box (NbChart.chartableKinds numbers)
                     , List.member NbChart.Trend (NbChart.chartableKinds numbers)
                     )
-        , test "a two-numeric-column table offers Trend" <|
-            \_ -> Expect.equal True (List.member NbChart.Trend (NbChart.chartableKinds table))
+        , test "a two-numeric-column table offers Trend and Stacked" <|
+            \_ ->
+                Expect.equal ( True, True )
+                    ( List.member NbChart.Trend (NbChart.chartableKinds table)
+                    , List.member NbChart.Stacked (NbChart.chartableKinds table)
+                    )
+        , test "Bubble needs three numeric columns" <|
+            \_ ->
+                let
+                    three =
+                        VList [ VRecord [ ( "x", n 1 ), ( "y", n 2 ), ( "z", n 3 ) ] ]
+                in
+                Expect.equal ( False, True )
+                    ( List.member NbChart.Bubble (NbChart.chartableKinds table)
+                    , List.member NbChart.Bubble (NbChart.chartableKinds three)
+                    )
         ]
 
 

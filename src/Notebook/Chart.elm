@@ -36,6 +36,8 @@ type ChartKind
     | Trend
     | Pie
     | Area
+    | Stacked
+    | Bubble
 
 
 {-| A short label for a chart kind. -}
@@ -69,6 +71,12 @@ label kind =
         Area ->
             "Area"
 
+        Stacked ->
+            "Stacked"
+
+        Bubble ->
+            "Bubble"
+
 
 {-| Can this value be charted at all? -}
 chartable : Value -> Bool
@@ -81,12 +89,18 @@ numeric columns; the rest apply to any chartable value. -}
 chartableKinds : Value -> List ChartKind
 chartableKinds value =
     let
-        multi =
-            List.length (numericColumns value) >= 2
+        numN =
+            List.length (numericColumns value)
     in
     [ Bar, Line, Area, Histogram, Box, Pie ]
-        ++ (if multi then
-                [ Scatter, Trend, MultiLine ]
+        ++ (if numN >= 2 then
+                [ Scatter, Trend, MultiLine, Stacked ]
+
+            else
+                []
+           )
+        ++ (if numN >= 3 then
+                [ Bubble ]
 
             else
                 []
@@ -124,6 +138,12 @@ view kind col value =
 
         Area ->
             areaChart Chart.defaults value
+
+        Stacked ->
+            stackedChart Chart.defaults value
+
+        Bubble ->
+            bubbleChart Chart.defaults value
 
 
 
@@ -701,6 +721,144 @@ areaChart c value =
 lastOf : List a -> Maybe a
 lastOf xs =
     List.head (List.reverse xs)
+
+
+
+-- STACKED BARS ---------------------------------------------------------------
+
+
+{-| A stacked bar per table row: one coloured segment for each numeric column. -}
+stackedChart : Chart.Config -> Value -> Svg msg
+stackedChart c value =
+    let
+        cols =
+            numericColumns value
+
+        rs =
+            rows value
+
+        labelCol =
+            firstColumn isText value (Value.tableColumns value)
+
+        rowVals row =
+            List.map (\name -> rowValue name row) cols
+
+        totals =
+            List.map (\row -> List.sum (rowVals row)) rs
+
+        yS =
+            Scale.linear (Scale.niceBounds (0 :: totals)) ( c.top + plotHeight c, c.top )
+
+        count =
+            List.length rs
+
+        slot =
+            plotWidth c / toFloat (Basics.max 1 count)
+
+        barW =
+            slot * 0.62
+
+        bar i row =
+            stackedBar c yS (c.left + slot * (toFloat i + 0.5)) barW (rowLabel labelCol i row) (rowVals row)
+    in
+    chartRoot c (Chart.frame c yS ++ List.indexedMap bar rs)
+
+
+stackedBar : Chart.Config -> Scale.Scale -> Float -> Float -> String -> List Float -> Svg msg
+stackedBar c yS cx barW lbl vals =
+    let
+        segs =
+            stackSegments 0 vals
+
+        rect k ( lo, hi ) =
+            Svg.rect
+                [ SA.x (Scale.num (cx - barW / 2))
+                , SA.y (Scale.num (Scale.convert yS hi))
+                , SA.width (Scale.num barW)
+                , SA.height (Scale.num (Basics.max 0.4 (Scale.convert yS lo - Scale.convert yS hi)))
+                , SA.fill (colorAt k)
+                ]
+                []
+    in
+    Svg.g [] (List.indexedMap rect segs ++ [ stackLabel c cx lbl ])
+
+
+stackSegments : Float -> List Float -> List ( Float, Float )
+stackSegments acc vals =
+    case vals of
+        [] ->
+            []
+
+        v :: rest ->
+            ( acc, acc + v ) :: stackSegments (acc + v) rest
+
+
+stackLabel : Chart.Config -> Float -> String -> Svg msg
+stackLabel c cx lbl =
+    Svg.text_
+        [ SA.x (Scale.num cx), SA.y (Scale.num (c.height - c.bottom + 13)), SA.fill c.label, SA.fontSize "9", SA.textAnchor "middle" ]
+        [ Svg.text (legendClip lbl) ]
+
+
+
+-- BUBBLE ---------------------------------------------------------------------
+
+
+{-| A bubble chart: the first two numeric columns are X and Y, the third sizes each dot. -}
+bubbleChart : Chart.Config -> Value -> Svg msg
+bubbleChart c value =
+    case numericColumns value of
+        xN :: yN :: sN :: _ ->
+            let
+                pts =
+                    List.filterMap (triple xN yN sN) (rows value)
+
+                xs =
+                    List.map (\( x, _, _ ) -> x) pts
+
+                ys =
+                    List.map (\( _, y, _ ) -> y) pts
+
+                ss =
+                    List.map (\( _, _, s ) -> s) pts
+
+                xS =
+                    Scale.linear (Scale.niceBounds xs) ( c.left, c.left + plotWidth c )
+
+                yS =
+                    Scale.linear (Scale.niceBounds ys) ( c.top + plotHeight c, c.top )
+
+                sMax =
+                    maxOr 1 ss
+
+                rOf s =
+                    3 + 15 * sqrt (Basics.max 0 s / Basics.max 1 sMax)
+
+                dot ( x, y, s ) =
+                    Svg.circle
+                        [ SA.cx (Scale.num (Scale.convert xS x))
+                        , SA.cy (Scale.num (Scale.convert yS y))
+                        , SA.r (Scale.num (rOf s))
+                        , SA.fill "rgba(91, 110, 245, 0.45)"
+                        , SA.stroke c.color
+                        , SA.strokeWidth "1"
+                        ]
+                        []
+            in
+            chartRoot c (Chart.frame c yS ++ List.map dot pts)
+
+        _ ->
+            chartRoot c []
+
+
+triple : String -> String -> String -> Value -> Maybe ( Float, Float, Float )
+triple xN yN sN row =
+    case ( Value.fieldOf xN row, Value.fieldOf yN row, Value.fieldOf sN row ) of
+        ( Just (VNum x), Just (VNum y), Just (VNum s) ) ->
+            Just ( x, y, s )
+
+        _ ->
+            Nothing
 
 
 

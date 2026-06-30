@@ -90,6 +90,13 @@ entries =
     , Entry "mode" "List Float -> Float" "The most frequent value." "mode numbers"
     , Entry "rsquared" "List Float -> List Float -> Float" "Coefficient of determination (r²)." "rsquared xs ys"
 
+    -- reshaping
+    , Entry "transpose" "List (List a) -> List (List a)" "Flip a 2-D grid's rows and columns." "transpose grid"
+    , Entry "topN" "Int -> List Float -> List Float" "The n largest values, descending." "topN 5 numbers"
+    , Entry "bottomN" "Int -> List Float -> List Float" "The n smallest values, ascending." "bottomN 5 numbers"
+    , Entry "share" "List Float -> List Float" "Each value as a fraction of the total." "share numbers"
+    , Entry "cumPercent" "List Float -> List Float" "Running cumulative share (0..1)." "cumPercent numbers"
+
     -- window / running calculations
     , Entry "diff" "List Float -> List Float" "Successive differences." "diff numbers"
     , Entry "movingAvg" "Int -> List Float -> List Float" "Moving average over a window of n." "movingAvg 3 numbers"

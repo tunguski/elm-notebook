@@ -599,3 +599,27 @@ a:hover { text-decoration: underline; }
 .nb-md-hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 .nb-md del { color: var(--muted); }
 .nb-md mark { background: #fff3a0; padding: 0 2px; border-radius: 3px; }
+
+/* ---- round 8: dark mode (re-scopes the palette for the notebook subtree) ---- */
+.nb-theme-dark {
+  --bg: #161a22;
+  --panel: #1e242e;
+  --ink: #d7dce5;
+  --muted: #8a97ac;
+  --line: #2c333f;
+  --accent: #8da2ff;
+  --accent-soft: #232a3a;
+  --num: #f59e6b;
+  --str: #86d2a0;
+  --bool: #b79cff;
+  background: #161a22;
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+.nb-theme-dark .nb-md-table thead th { background: #232a3a; }
+
+/* ---- round 8: collapsible sections ---- */
+.nb-section-fold { padding: .25rem .45rem; }
+.nb-section-fold .bi { font-size: 13px; vertical-align: -1px; }
+.nb-section-collapsed { opacity: 0.92; }

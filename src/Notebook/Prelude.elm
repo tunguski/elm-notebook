@@ -548,4 +548,44 @@ mode numbers =
             List.foldl (\\g acc -> if g.count > acc.count then g else acc) { key = 0, count = 0, items = [] } grouped
     in
     best.key
+
+
+transpose rows =
+    if List.isEmpty rows || List.any List.isEmpty rows then
+        []
+
+    else
+        List.filterMap List.head rows :: transpose (List.map (List.drop 1) rows)
+
+
+topN n numbers =
+    List.take n (sortDesc numbers)
+
+
+bottomN n numbers =
+    List.take n (List.sort numbers)
+
+
+share numbers =
+    let
+        t =
+            List.sum numbers
+    in
+    if t == 0 then
+        List.map (\\x -> 0) numbers
+
+    else
+        List.map (\\x -> x / t) numbers
+
+
+cumPercent numbers =
+    let
+        t =
+            List.sum numbers
+    in
+    if t == 0 then
+        List.map (\\x -> 0) numbers
+
+    else
+        List.map (\\x -> x / t) (cumSum numbers)
 """

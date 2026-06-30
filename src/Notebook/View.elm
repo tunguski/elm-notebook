@@ -109,6 +109,10 @@ type alias Config msg =
     , onFilterCol : Int -> Int -> String -> msg
     , onFilterOp : Int -> Int -> String -> msg
     , onFilterValue : Int -> Int -> String -> msg
+    , barsOn : Int -> Bool
+    , onBars : Int -> Bool -> msg
+    , sectionFolded : Int -> Bool
+    , onFoldSection : Int -> msg
     }
 
 
@@ -136,11 +140,72 @@ matchClass config cell =
 -- NOTEBOOK -------------------------------------------------------------------
 
 
-{-| Render the whole notebook: every cell, in order. -}
+{-| Render the whole notebook: every cell, in order — skipping cells inside a collapsed section. -}
 notebook : Config msg -> Doc -> Html msg
 notebook config doc =
+    let
+        hidden =
+            sectionHidden config doc.cells
+    in
     div [ HA.class "nb-cells" ]
-        (List.map (cellView config) doc.cells)
+        (List.filterMap
+            (\c ->
+                if Set.member c.id hidden then
+                    Nothing
+
+                else
+                    Just (cellView config c)
+            )
+            doc.cells
+        )
+
+
+{-| The ids of cells inside a collapsed section: those after a folded heading, up to the next
+heading of the same or higher level. -}
+sectionHidden : Config msg -> List Cell -> Set Int
+sectionHidden config cells =
+    sectionScan config cells 0 Set.empty
+
+
+sectionScan : Config msg -> List Cell -> Int -> Set Int -> Set Int
+sectionScan config cells active acc =
+    case cells of
+        [] ->
+            acc
+
+        c :: rest ->
+            let
+                lvl =
+                    headingLevel c
+            in
+            if active > 0 && not (lvl > 0 && lvl <= active) then
+                sectionScan config rest active (Set.insert c.id acc)
+
+            else
+                let
+                    nextActive =
+                        if lvl > 0 && config.sectionFolded c.id then
+                            lvl
+
+                        else
+                            0
+                in
+                sectionScan config rest nextActive acc
+
+
+{-| The heading level a Markdown cell opens with (1–6), or 0 if it isn't a heading cell. -}
+headingLevel : Cell -> Int
+headingLevel cell =
+    if Cell.isMarkdown cell then
+        case List.head (List.filter (\l -> String.startsWith "#" (String.trimLeft l)) (String.lines cell.source)) of
+            Just line ->
+                countHashes (String.trimLeft line)
+
+            Nothing ->
+                0
+
+    else
+        0
 
 
 cellView : Config msg -> Cell -> Html msg
@@ -542,6 +607,7 @@ cellToolbar config cell =
         (runGroup
             ++ [ commentMarker config cell
                , div [ HA.class "nb-toolbar-spacer" ] []
+               , sectionFoldButton config cell
                , iconBtn "bi-dash-square" "Collapse" (config.onFold cell.id)
                , iconBtn "bi-files" "Duplicate" (config.onDuplicate cell.id)
                , iconBtn "bi-text-indent-left" "Insert cell above" (config.onInsertAbove cell.id)
@@ -552,6 +618,20 @@ cellToolbar config cell =
                , toolButton "✕" (config.onDelete cell.id)
                ]
         )
+
+
+{-| For a heading (Markdown) cell, a chevron that folds/unfolds the whole section beneath it. -}
+sectionFoldButton : Config msg -> Cell -> Html msg
+sectionFoldButton config cell =
+    if headingLevel cell > 0 then
+        if config.sectionFolded cell.id then
+            iconBtn "bi-chevron-right" "Expand section" (config.onFoldSection cell.id)
+
+        else
+            iconBtn "bi-chevron-down" "Collapse section" (config.onFoldSection cell.id)
+
+    else
+        text ""
 
 
 commentMarker : Config msg -> Cell -> Html msg
@@ -916,11 +996,14 @@ interactiveTable config cell value =
         heat =
             config.heatOn cell.id
 
+        bars =
+            config.barsOn cell.id
+
         foot =
             config.footerOn cell.id
 
         ranges =
-            if heat then
+            if heat || bars then
                 List.filterMap
                     (\c -> Heatmap.range (columnNums c sorted) |> Maybe.map (\rg -> ( c, rg )))
                     numCols
@@ -955,6 +1038,11 @@ interactiveTable config cell value =
                 text ""
 
               else
+                tableChip "Bars" bars (config.onBars cell.id (not bars))
+            , if List.isEmpty numCols then
+                text ""
+
+              else
                 tableChip "Σ Summary" foot (config.onFooter cell.id (not foot))
             , if List.isEmpty numCols then
                 text ""
@@ -964,7 +1052,7 @@ interactiveTable config cell value =
             ]
         , columnToggles config cell cols hidden
         , filterBuilder config cell cols clauses
-        , wrapTable ([ header, tbody [] (List.map (dataRow fmt heat ranges visibleCols) shown) ] ++ footRows)
+        , wrapTable ([ header, tbody [] (List.map (dataRow fmt heat bars ranges visibleCols) shown) ] ++ footRows)
         , if total > tableCap then
             button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
                 [ text
@@ -1070,31 +1158,55 @@ filterClause config cell cols i clause =
         ]
 
 
-{-| A data row whose numeric cells are formatted (per the table's number format) and heat-shaded
-(when `heat` is on) by their column's range. -}
-dataRow : Format.Format -> Bool -> List ( String, ( Float, Float ) ) -> List String -> Value -> Html msg
-dataRow fmt heat ranges cols row =
-    tr [] (List.map (heatCell fmt heat ranges row) cols)
+{-| A data row whose numeric cells are formatted (per the table's number format), heat-shaded
+(when `heat` is on) or drawn as in-cell data bars (when `bars` is on), by their column's range. -}
+dataRow : Format.Format -> Bool -> Bool -> List ( String, ( Float, Float ) ) -> List String -> Value -> Html msg
+dataRow fmt heat bars ranges cols row =
+    tr [] (List.map (heatCell fmt heat bars ranges row) cols)
 
 
-heatCell : Format.Format -> Bool -> List ( String, ( Float, Float ) ) -> Value -> String -> Html msg
-heatCell fmt heat ranges row col =
+heatCell : Format.Format -> Bool -> Bool -> List ( String, ( Float, Float ) ) -> Value -> String -> Html msg
+heatCell fmt heat bars ranges row col =
     case Value.fieldOf col row of
         Just (VNum n) ->
-            td (numCellAttrs heat ranges col n) [ text (Format.format fmt n) ]
+            td (numCellAttrs heat bars ranges col n) [ text (Format.format fmt n) ]
 
         maybeOther ->
             td [] [ cellHtml maybeOther ]
 
 
-numCellAttrs : Bool -> List ( String, ( Float, Float ) ) -> String -> Float -> List (Html.Attribute msg)
-numCellAttrs heat ranges col n =
-    case ( heat, lookupRange col ranges ) of
-        ( True, Just rg ) ->
-            [ HA.class "nb-num-cell", HA.style "background" (Heatmap.color rg n) ]
+numCellAttrs : Bool -> Bool -> List ( String, ( Float, Float ) ) -> String -> Float -> List (Html.Attribute msg)
+numCellAttrs heat bars ranges col n =
+    case lookupRange col ranges of
+        Just rg ->
+            if bars then
+                [ HA.class "nb-num-cell", HA.style "background" (dataBarBg rg n) ]
 
-        _ ->
+            else if heat then
+                [ HA.class "nb-num-cell", HA.style "background" (Heatmap.color rg n) ]
+
+            else
+                [ HA.class "nb-num-cell" ]
+
+        Nothing ->
             [ HA.class "nb-num-cell" ]
+
+
+{-| A left-anchored data bar filling the cell to the value's position in its column's range. -}
+dataBarBg : ( Float, Float ) -> Float -> String
+dataBarBg ( lo, hi ) v =
+    let
+        pct =
+            if hi == lo then
+                100
+
+            else
+                Basics.max 0 (Basics.min 100 ((v - lo) / (hi - lo) * 100))
+
+        edge =
+            String.fromFloat pct ++ "%"
+    in
+    "linear-gradient(90deg, rgba(91, 110, 245, 0.22) " ++ edge ++ ", transparent " ++ edge ++ ")"
 
 
 lookupRange : String -> List ( String, ( Float, Float ) ) -> Maybe ( Float, Float )
