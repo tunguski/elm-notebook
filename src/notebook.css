@@ -428,7 +428,10 @@ a:hover { text-decoration: underline; }
 .nb-action-report:hover { background: var(--accent-soft); }
 .nb-report-mode .nb-main { display: block; }
 .nb-report-mode .nb-notebook { max-width: 760px; margin: 0 auto; }
-.nb-cell-report { border: none; background: none; padding: 6px 0; margin: 0; }
+/* Report cells render a single content child (no gutter/prompt). The base .nb-cell is a
+   "64px gutter + content" grid, which would squeeze that lone child into the 64px column —
+   so report cells must lay out as a normal block spanning the full notebook width. */
+.nb-cell-report { display: block; border: none; background: none; padding: 6px 0; margin: 0; }
 .nb-cell-report .nb-value { padding-left: 0; }
 .nb-report-mode .nb-cell-report.nb-cell-md { padding: 4px 0; }
 
