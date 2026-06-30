@@ -24,6 +24,7 @@ separately per host.
 type alias T =
     { -- toolbar
       runAll : String
+    , runStale : Int -> String
     , rerunAffected : String
     , addCode : String
     , addText : String
@@ -68,9 +69,12 @@ type alias T =
     , findInCells : String
     , replaceWith : String
     , replaceAll : String
+    , cellsFound : Int -> String
 
     -- import dialog
     , pasteData : String
+    , detectedJson : String
+    , detectedCsv : String
     , namePlaceholder : String
     , dataPlaceholder : String
     , importToCell : String
@@ -184,6 +188,7 @@ type alias T =
 en : T
 en =
     { runAll = "▶▶ Run all"
+    , runStale = \n -> " Run stale (" ++ String.fromInt n ++ ")"
     , rerunAffected = "Re-run the cells affected by your edits"
     , addCode = "+ Code cell"
     , addText = "+ Text cell"
@@ -222,7 +227,18 @@ en =
     , findInCells = "Find in cells…"
     , replaceWith = "Replace with…"
     , replaceAll = "Replace all"
+    , cellsFound =
+        \n ->
+            String.fromInt n
+                ++ (if n == 1 then
+                        " cell"
+
+                    else
+                        " cells"
+                   )
     , pasteData = "Paste data — a JSON array of objects, or CSV / TSV"
+    , detectedJson = "detected: JSON"
+    , detectedCsv = "detected: CSV / TSV"
     , namePlaceholder = "name"
     , dataPlaceholder = "[ { \"city\": \"Oslo\", \"pop\": 700000 }, … ]"
     , importToCell = "Import → cell"

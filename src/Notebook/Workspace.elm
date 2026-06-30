@@ -1381,7 +1381,7 @@ toolbar opts showCopy staleCount report canUndo canRedo doc =
             ++ undoButtons t canUndo canRedo
             ++ [ if staleCount > 0 then
             button [ HA.class "nb-action nb-action-stale", HE.onClick RunStale, HA.title t.rerunAffected ]
-                [ Html.i [ HA.class "bi bi-arrow-repeat" ] [], text (" Run stale (" ++ String.fromInt staleCount ++ ")") ]
+                [ Html.i [ HA.class "bi bi-arrow-repeat" ] [], text (t.runStale staleCount) ]
 
           else
             text ""
@@ -1502,13 +1502,7 @@ findBar t find doc =
                             ""
 
                          else
-                            String.fromInt count
-                                ++ (if count == 1 then
-                                        " cell"
-
-                                    else
-                                        " cells"
-                                   )
+                            t.cellsFound count
                         )
                     ]
                 , button [ HA.class "nb-action", HE.onClick ReplaceAll ] [ text t.replaceAll ]
@@ -1549,10 +1543,10 @@ pastePanel t paste =
                                 ""
 
                              else if Import.looksLikeJson txt then
-                                "detected: JSON"
+                                t.detectedJson
 
                              else
-                                "detected: CSV / TSV"
+                                t.detectedCsv
                             )
                         ]
                     ]
