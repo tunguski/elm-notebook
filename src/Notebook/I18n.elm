@@ -136,11 +136,24 @@ type alias T =
     , columnPlaceholder : String
     , valuePlaceholder : String
     , removeFilter : String
+    , rowsLabel : String
+    , showingOf : Int -> Int -> String
+
+    -- column profile panel
+    , profColumn : String
+    , profType : String
+    , profCount : String
+    , profDistinct : String
+    , profMin : String
+    , profMax : String
+    , profMean : String
+    , profTrend : String
 
     -- input control kinds
     , slider : String
     , checkbox : String
     , number : String
+    , controlText : String
 
     -- suggestions panel
     , suggestedNextSteps : String
@@ -265,9 +278,20 @@ en =
     , columnPlaceholder = "column…"
     , valuePlaceholder = "value"
     , removeFilter = "Remove filter"
+    , rowsLabel = " rows"
+    , showingOf = \shown total -> "showing " ++ String.fromInt shown ++ " of " ++ String.fromInt total
+    , profColumn = "column"
+    , profType = "type"
+    , profCount = "count"
+    , profDistinct = "distinct"
+    , profMin = "min"
+    , profMax = "max"
+    , profMean = "mean"
+    , profTrend = "trend"
     , slider = "Slider"
     , checkbox = "Checkbox"
     , number = "Number"
+    , controlText = "Text"
     , suggestedNextSteps = "Suggested next steps"
     , suggestedLead = "Based on your last result. Click one to add it as a new cell."
     , overviewTitle = "Notebook"

@@ -344,7 +344,7 @@ controlSelect config cell spec =
         [ HA.class "nb-input-type", HE.onInput (config.onInputControl cell.id) ]
         [ controlOption "slider" config.t.slider (isSlider spec.control)
         , controlOption "number" config.t.number (spec.control == NumberBox)
-        , controlOption "text" "Text" (spec.control == TextBox)
+        , controlOption "text" config.t.controlText (spec.control == TextBox)
         , controlOption "checkbox" config.t.checkbox (spec.control == Checkbox)
         ]
 
@@ -712,10 +712,10 @@ renderOutput config cell value =
 
                     Nothing ->
                         if config.isCorr cell.id then
-                            correlationView value
+                            correlationView config value
 
                         else if config.isProfile cell.id then
-                            profilePanel value
+                            profilePanel config value
 
                         else
                             chartOrTable config cell value
@@ -823,14 +823,14 @@ groupView config cell value spec =
 
 
 {-| The correlation matrix of the table's numeric columns, colour-graded blue (positive) to red. -}
-correlationView : Value -> Html msg
-correlationView value =
+correlationView : Config msg -> Value -> Html msg
+correlationView config value =
     let
         m =
             Correlation.matrix value
     in
     if List.isEmpty m.columns then
-        p [ HA.class "nb-vars-empty" ] [ text "Needs a table with numeric columns." ]
+        p [ HA.class "nb-vars-empty" ] [ text config.t.needsNumericTable ]
 
     else
         wrapTable
@@ -874,8 +874,8 @@ round2 r =
 
 
 {-| A per-column overview of a table: type, count, distinct, and numeric min / max / mean. -}
-profilePanel : Value -> Html msg
-profilePanel value =
+profilePanel : Config msg -> Value -> Html msg
+profilePanel config value =
     let
         num maybe =
             maybe |> Maybe.map Value.numberToString |> Maybe.withDefault "—"
@@ -905,7 +905,7 @@ profilePanel value =
             [ thead []
                 [ tr []
                     (List.map (\h -> th [] [ text h ])
-                        [ "column", "type", "count", "distinct", "min", "max", "mean", "trend" ]
+                        [ config.t.profColumn, config.t.profType, config.t.profCount, config.t.profDistinct, config.t.profMin, config.t.profMax, config.t.profMean, config.t.profTrend ]
                     )
                 ]
             , tbody [] (List.map row (Profile.columns value))
@@ -1030,7 +1030,7 @@ interactiveTable config cell value =
                 , HE.onInput (config.onFilter cell.id)
                 ]
                 []
-            , span [ HA.class "nb-table-count" ] [ text (countLabel (List.length shown) total) ]
+            , span [ HA.class "nb-table-count" ] [ text (countLabel config.t (List.length shown) total) ]
             , if List.isEmpty numCols then
                 text ""
 
@@ -1062,7 +1062,7 @@ interactiveTable config cell value =
                         config.t.showFewer
 
                      else
-                        config.t.showAll ++ String.fromInt total ++ " rows"
+                        config.t.showAll ++ String.fromInt total ++ config.t.rowsLabel
                     )
                 ]
 
@@ -1328,13 +1328,13 @@ compareField col a b =
             EQ
 
 
-countLabel : Int -> Int -> String
-countLabel shown total =
+countLabel : I18n.T -> Int -> Int -> String
+countLabel t shown total =
     if shown == total then
-        String.fromInt total ++ " rows"
+        String.fromInt total ++ t.rowsLabel
 
     else
-        "showing " ++ String.fromInt shown ++ " of " ++ String.fromInt total
+        t.showingOf shown total
 
 
 chartToggle : Config msg -> Cell -> Value -> Html msg
