@@ -1,5 +1,5 @@
 module Workspace exposing
-    ( Model, Msg, Config, DocCodec, EditorEnv
+    ( Model, Msg, Config, Template, DocCodec, EditorEnv
     , init, update, view, subscriptions
     , openDocument, createFrom
     )
@@ -34,6 +34,7 @@ import Random
 import Url
 import Workspace.Backend exposing (Backend, Context)
 import Workspace.Comment as Comment
+import Workspace.I18n as I18n
 import Workspace.Permissions as Permissions
 import Workspace.Serialize as Serialize
 import Workspace.Table as Table
@@ -80,6 +81,8 @@ type alias EditorEnv =
   - `elementsOf` — the `(key, label)` of the document's commentable elements.
   - `toTable` — a document as a table for export (`Nothing` ⇒ no export offered).
   - `onImport` — apply an imported / queried table to the document (`Nothing` ⇒ no import offered).
+  - `t` — the chrome translations (see [`Workspace.I18n`](Workspace-I18n)).
+  - `templates` — optional starting templates offered when creating a document (empty ⇒ no picker).
 
 -}
 type alias Config doc docMsg =
@@ -92,6 +95,18 @@ type alias Config doc docMsg =
     , elementsOf : doc -> List ( String, String )
     , toTable : doc -> Maybe Table
     , onImport : Maybe (Table -> doc -> doc)
+    , t : I18n.T
+    , templates : List (Template doc)
+    }
+
+
+{-| A starting template offered at create time: an `id`, a `label` and `blurb` shown on its card, and
+the `doc` value the new document starts from when the user picks it. -}
+type alias Template doc =
+    { id : String
+    , label : String
+    , blurb : String
+    , doc : doc
     }
 
 
@@ -106,6 +121,7 @@ type Page
 
 type Dialog
     = NoDialog
+    | NewDialog
     | PermissionsDialog
     | ImportDialog
     | QueryDialog
@@ -182,6 +198,7 @@ type Msg docMsg
     | GotDoc (Result String String)
     | GotForDuplicate Id (Result String String)
     | New
+    | PickTemplate String
     | CreateFresh Id
     | CreatedStaged Id
     | StartDuplicate Id Id
@@ -224,7 +241,7 @@ update config backend ctx msg model =
             ( { model | metas = metas }, Cmd.none )
 
         GotMetas (Err e) ->
-            ( { model | notice = Just ("Could not list documents: " ++ e) }, Cmd.none )
+            ( { model | notice = Just (config.t.couldNotListDocuments ++ e) }, Cmd.none )
 
         GotDoc (Ok json) ->
             case decodeStored config json of
@@ -239,7 +256,7 @@ update config backend ctx msg model =
                     )
 
                 Err e ->
-                    ( { model | notice = Just ("Could not open document: " ++ e) }, Cmd.none )
+                    ( { model | notice = Just (config.t.couldNotOpenDocument ++ e) }, Cmd.none )
 
         GotDoc (Err e) ->
             ( { model | notice = Just e }, Cmd.none )
@@ -250,7 +267,7 @@ update config backend ctx msg model =
                     let
                         meta =
                             { id = newId
-                            , name = "Copy of " ++ displayName stored.meta.name
+                            , name = config.t.copyOf ++ displayName config.t stored.meta.name
                             , kind = stored.meta.kind
                             , access = Types.defaultAccess ctx.user
                             }
@@ -261,18 +278,32 @@ update config backend ctx msg model =
                         metas =
                             model.metas ++ [ meta ]
                     in
-                    ( { model | metas = metas, notice = Just ("Copied to “" ++ meta.name ++ "”.") }
+                    ( { model | metas = metas, notice = Just (config.t.copiedTo ++ meta.name ++ "”.") }
                     , Cmd.batch [ saveDoc config backend copy, backend.saveIndex metas ]
                     )
 
                 Err e ->
-                    ( { model | notice = Just ("Could not copy: " ++ e) }, Cmd.none )
+                    ( { model | notice = Just (config.t.couldNotCopy ++ e) }, Cmd.none )
 
         GotForDuplicate _ (Err e) ->
-            ( { model | notice = Just ("Could not copy: " ++ e) }, Cmd.none )
+            ( { model | notice = Just (config.t.couldNotCopy ++ e) }, Cmd.none )
 
         New ->
-            ( model, Random.generate CreateFresh uuidGenerator )
+            if List.isEmpty config.templates then
+                ( model, Random.generate CreateFresh uuidGenerator )
+
+            else
+                ( { model | dialog = NewDialog, notice = Nothing }, Cmd.none )
+
+        PickTemplate templateId ->
+            case List.filter (\tpl -> tpl.id == templateId) config.templates of
+                tpl :: _ ->
+                    ( { model | pending = Just tpl.doc, dialog = NoDialog }
+                    , Random.generate CreatedStaged uuidGenerator
+                    )
+
+                [] ->
+                    ( { model | dialog = NoDialog }, Cmd.none )
 
         CreateFresh id ->
             openNew config backend ctx id config.empty model
@@ -447,7 +478,7 @@ update config backend ctx msg model =
 
         SubmitImport ->
             if String.trim model.urlDraft == "" then
-                ( { model | notice = Just "Enter a URL to import." }, Cmd.none )
+                ( { model | notice = Just config.t.enterUrlToImport }, Cmd.none )
 
             else
                 ( model, backend.fetchUrl (String.trim model.urlDraft) GotImport )
@@ -466,10 +497,10 @@ update config backend ctx msg model =
                     applyImport config backend { model | dialog = NoDialog, urlDraft = "" } t
 
                 Err e ->
-                    ( { model | notice = Just ("Could not parse data: " ++ e) }, Cmd.none )
+                    ( { model | notice = Just (config.t.couldNotParseData ++ e) }, Cmd.none )
 
         GotImport (Err e) ->
-            ( { model | notice = Just ("Import failed: " ++ e) }, Cmd.none )
+            ( { model | notice = Just (config.t.importFailed ++ e) }, Cmd.none )
 
         SetSqlDraft s ->
             ( { model | sqlDraft = s }, Cmd.none )
@@ -478,27 +509,27 @@ update config backend ctx msg model =
             case backend.query of
                 Just runQuery ->
                     if String.trim model.sqlDraft == "" then
-                        ( { model | notice = Just "Enter a query." }, Cmd.none )
+                        ( { model | notice = Just config.t.enterAQuery }, Cmd.none )
 
                     else
                         ( model, runQuery (String.trim model.sqlDraft) GotQuery )
 
                 Nothing ->
-                    ( { model | notice = Just "This workspace has no database connection." }, Cmd.none )
+                    ( { model | notice = Just config.t.noDatabaseConnection }, Cmd.none )
 
         GotQuery (Ok table) ->
             applyImport config backend { model | dialog = NoDialog } table
 
         GotQuery (Err e) ->
-            ( { model | notice = Just ("Query failed: " ++ e) }, Cmd.none )
+            ( { model | notice = Just (config.t.queryFailed ++ e) }, Cmd.none )
 
         ExportExcel ->
             case ( backend.exportExcel, Maybe.andThen (\s -> config.toTable s.doc) model.open ) of
                 ( Just doExport, Just table ) ->
-                    ( model, doExport { filename = exportName model ++ ".xlsx", table = table } )
+                    ( model, doExport { filename = exportName config.t model ++ ".xlsx", table = table } )
 
                 _ ->
-                    ( { model | notice = Just "Excel export is not available here." }, Cmd.none )
+                    ( { model | notice = Just config.t.excelNotAvailable }, Cmd.none )
 
         DismissNotice ->
             ( { model | notice = Nothing }, Cmd.none )
@@ -558,7 +589,7 @@ applyImport config backend model table =
                 { model | open = Just (Types.setDoc (config.activate (apply table stored.doc)) stored) }
 
         _ ->
-            ( { model | notice = Just "This document does not support importing data." }, Cmd.none )
+            ( { model | notice = Just config.t.doesNotSupportImporting }, Cmd.none )
 
 
 {-| Persist the open document and the index after a change. -}
@@ -615,20 +646,20 @@ draftKey elementKey parent =
             elementKey
 
 
-displayName : String -> String
-displayName name =
+displayName : I18n.T -> String -> String
+displayName t name =
     if String.trim name == "" then
-        "Untitled"
+        t.untitled
 
     else
         name
 
 
-exportName : Model doc -> String
-exportName model =
+exportName : I18n.T -> Model doc -> String
+exportName t model =
     case model.open of
         Just stored ->
-            sanitize (displayName stored.meta.name)
+            sanitize (displayName t stored.meta.name)
 
         Nothing ->
             "document"
@@ -770,48 +801,48 @@ browseView : Config doc docMsg -> Context -> Model doc -> Html (Msg docMsg)
 browseView config ctx model =
     let
         rows =
-            visibleMetas ctx model
+            visibleMetas config.t ctx model
     in
     section [ HA.class "ws-browse" ]
         [ div [ HA.class "ws-browse-bar" ]
             [ input
                 [ HA.class "ws-search"
-                , HA.placeholder "Search documents…"
+                , HA.placeholder config.t.searchDocuments
                 , HA.value model.search
                 , HE.onInput SetSearch
                 ]
                 []
-            , button [ HA.class "ws-btn ws-btn-primary", HE.onClick New ] [ text "+ New" ]
+            , button [ HA.class "ws-btn ws-btn-primary", HE.onClick New ] [ text config.t.newButton ]
             ]
         , if List.isEmpty rows then
             div [ HA.class "ws-empty" ]
                 [ text
                     (if model.search == "" then
-                        "No documents yet — create one to get started."
+                        config.t.noDocumentsYet
 
                      else
-                        "No documents match your search."
+                        config.t.noDocumentsMatch
                     )
                 ]
 
           else
-            ul [ HA.class "ws-list" ] (List.map (metaRow ctx) rows)
+            ul [ HA.class "ws-list" ] (List.map (metaRow config.t ctx) rows)
         ]
 
 
-metaRow : Context -> Meta -> Html (Msg docMsg)
-metaRow ctx meta =
+metaRow : I18n.T -> Context -> Meta -> Html (Msg docMsg)
+metaRow t ctx meta =
     li [ HA.class "ws-row" ]
         [ div [ HA.class "ws-row-main", HE.onClick (Open meta.id) ]
-            [ span [ HA.class "ws-row-name" ] [ text (displayName meta.name) ]
+            [ span [ HA.class "ws-row-name" ] [ text (displayName t meta.name) ]
             , span [ HA.class "ws-row-kind" ] [ text meta.kind ]
             , visibilityBadge meta.access.visibility
             ]
         , div [ HA.class "ws-row-actions" ]
-            [ iconButton "ws-icon" "Open" "bi-folder2-open" (Open meta.id)
-            , iconButton "ws-icon" "Make a copy" "bi-files" (Duplicate meta.id)
+            [ iconButton "ws-icon" t.open "bi-folder2-open" (Open meta.id)
+            , iconButton "ws-icon" t.makeACopy "bi-files" (Duplicate meta.id)
             , if Permissions.canWrite ctx meta.access then
-                iconButton "ws-icon ws-icon-danger" "Delete" "bi-trash" (Delete meta.id)
+                iconButton "ws-icon ws-icon-danger" t.delete "bi-trash" (Delete meta.id)
 
               else
                 text ""
@@ -841,8 +872,8 @@ visibilityBadge v =
         [ text (Types.visibilityLabel v) ]
 
 
-visibleMetas : Context -> Model doc -> List Meta
-visibleMetas ctx model =
+visibleMetas : I18n.T -> Context -> Model doc -> List Meta
+visibleMetas t ctx model =
     let
         q =
             String.toLower (String.trim model.search)
@@ -851,7 +882,7 @@ visibleMetas ctx model =
         |> List.filter (\m -> Permissions.canRead ctx m.access)
         |> List.filter
             (\m ->
-                q == "" || String.contains q (String.toLower (displayName m.name))
+                q == "" || String.contains q (String.toLower (displayName t m.name))
             )
 
 
@@ -900,11 +931,11 @@ editorBar config c ctx model stored writable =
             config.toTable stored.doc
     in
     div [ HA.class "ws-editor-bar" ]
-        [ button [ HA.class "ws-btn", HE.onClick Close ] [ text "← All documents" ]
+        [ button [ HA.class "ws-btn", HE.onClick Close ] [ text config.t.allDocuments ]
         , input
             [ HA.class "ws-name"
             , HA.value stored.meta.name
-            , HA.placeholder "Untitled"
+            , HA.placeholder config.t.untitled
             , HA.disabled (not writable)
             , HE.onInput Rename
             ]
@@ -920,7 +951,7 @@ editorBar config c ctx model stored writable =
                                 ""
                            )
                     )
-                , HA.title "Show / hide comments"
+                , HA.title config.t.showHideComments
                 , HE.onClick ToggleComments
                 ]
                 [ Html.i [ HA.class "bi bi-chat-dots" ] []
@@ -932,18 +963,18 @@ editorBar config c ctx model stored writable =
                         ""
                     )
                 ]
-            , button [ HA.class "ws-btn", HE.onClick (OpenDialog PermissionsDialog) ] [ text "Share" ]
+            , button [ HA.class "ws-btn", HE.onClick (OpenDialog PermissionsDialog) ] [ text config.t.share ]
             , case config.onImport of
                 Just _ ->
-                    button [ HA.class "ws-btn", HE.onClick (OpenDialog ImportDialog) ] [ text "Import URL" ]
+                    button [ HA.class "ws-btn", HE.onClick (OpenDialog ImportDialog) ] [ text config.t.importUrl ]
 
                 Nothing ->
                     text ""
             , queryButton config
             , exportLinks config c model stored table
-            , button [ HA.class "ws-btn", HE.onClick (Duplicate stored.meta.id) ] [ text "Copy" ]
+            , button [ HA.class "ws-btn", HE.onClick (Duplicate stored.meta.id) ] [ text config.t.copy ]
             , if writable then
-                button [ HA.class "ws-btn ws-btn-danger", HE.onClick (Delete stored.meta.id) ] [ text "Delete" ]
+                button [ HA.class "ws-btn ws-btn-danger", HE.onClick (Delete stored.meta.id) ] [ text config.t.delete ]
 
               else
                 text ""
@@ -955,7 +986,7 @@ queryButton : Config doc docMsg -> Html (Msg docMsg)
 queryButton config =
     case config.onImport of
         Just _ ->
-            button [ HA.class "ws-btn", HE.onClick (OpenDialog QueryDialog) ] [ text "SQL" ]
+            button [ HA.class "ws-btn", HE.onClick (OpenDialog QueryDialog) ] [ text config.t.sql ]
 
         Nothing ->
             text ""
@@ -966,10 +997,10 @@ exportLinks config c model stored table =
     case table of
         Just t ->
             span [ HA.class "ws-export" ]
-                [ downloadLink "CSV" (exportName model ++ ".csv") "text/csv" (Table.toCsv t)
-                , downloadLink "JSON" (exportName model ++ ".json") "application/json" (Table.toJson t)
+                [ downloadLink config.t.csv (exportName config.t model ++ ".csv") "text/csv" (Table.toCsv t)
+                , downloadLink config.t.json (exportName config.t model ++ ".json") "application/json" (Table.toJson t)
                 , if c.hasExcel then
-                    button [ HA.class "ws-btn", HE.onClick ExportExcel ] [ text "Excel" ]
+                    button [ HA.class "ws-btn", HE.onClick ExportExcel ] [ text config.t.excel ]
 
                   else
                     text ""
@@ -996,38 +1027,38 @@ downloadLink labelText filename mime content =
 commentsPanel : Config doc docMsg -> Context -> Stored doc -> Dict String String -> Html (Msg docMsg)
 commentsPanel config ctx stored drafts =
     div [ HA.class "ws-comments" ]
-        [ h3 [ HA.class "ws-comments-title" ] [ text "Comments" ]
-        , div [] (List.map (commentElement ctx stored.comments drafts) (config.elementsOf stored.doc))
+        [ h3 [ HA.class "ws-comments-title" ] [ text config.t.comments ]
+        , div [] (List.map (commentElement config.t ctx stored.comments drafts) (config.elementsOf stored.doc))
         ]
 
 
-commentElement : Context -> Comments -> Dict String String -> ( String, String ) -> Html (Msg docMsg)
-commentElement ctx comments drafts ( key, elabel ) =
+commentElement : I18n.T -> Context -> Comments -> Dict String String -> ( String, String ) -> Html (Msg docMsg)
+commentElement t ctx comments drafts ( key, elabel ) =
     let
         threads =
             Dict.get key comments |> Maybe.withDefault []
     in
     div [ HA.class "ws-comment-el" ]
         [ div [ HA.class "ws-comment-el-label" ] [ text elabel ]
-        , div [ HA.class "ws-thread" ] (List.map (commentNode ctx key drafts) threads)
-        , composer drafts key Nothing "Add a comment…"
+        , div [ HA.class "ws-thread" ] (List.map (commentNode t ctx key drafts) threads)
+        , composer t drafts key Nothing t.addAComment
         ]
 
 
-commentNode : Context -> String -> Dict String String -> Types.Comment -> Html (Msg docMsg)
-commentNode ctx key drafts node =
+commentNode : I18n.T -> Context -> String -> Dict String String -> Types.Comment -> Html (Msg docMsg)
+commentNode t ctx key drafts node =
     div [ HA.class "ws-comment" ]
         [ div [ HA.class "ws-comment-head" ]
             [ strong [] [ text (Types.commentAuthor node) ] ]
         , div [ HA.class "ws-comment-body" ] [ text (Types.commentBody node) ]
         , div [ HA.class "ws-replies" ]
-            (List.map (commentNode ctx key drafts) (Types.commentReplies node))
-        , composer drafts key (Just (Types.commentId node)) "Reply…"
+            (List.map (commentNode t ctx key drafts) (Types.commentReplies node))
+        , composer t drafts key (Just (Types.commentId node)) t.reply
         ]
 
 
-composer : Dict String String -> String -> Maybe Int -> String -> Html (Msg docMsg)
-composer drafts key parent ph =
+composer : I18n.T -> Dict String String -> String -> Maybe Int -> String -> Html (Msg docMsg)
+composer t drafts key parent ph =
     let
         dkey =
             draftKey key parent
@@ -1040,7 +1071,7 @@ composer drafts key parent ph =
             , HE.onInput (SetDraft dkey)
             ]
             []
-        , button [ HA.class "ws-btn", HE.onClick (SubmitComment key parent) ] [ text "Post" ]
+        , button [ HA.class "ws-btn", HE.onClick (SubmitComment key parent) ] [ text t.post ]
         ]
 
 
@@ -1051,17 +1082,42 @@ composer drafts key parent ph =
 dialogView : Config doc docMsg -> Caps -> Context -> Model doc -> Html (Msg docMsg)
 dialogView config c ctx model =
     case ( model.dialog, model.open ) of
+        ( NewDialog, _ ) ->
+            modal config.t.newNotebook (newBody config)
+
         ( PermissionsDialog, Just stored ) ->
-            modal "Sharing & permissions" (permissionsBody model stored.meta.access)
+            modal config.t.sharingPermissions (permissionsBody config.t model stored.meta.access)
 
         ( ImportDialog, _ ) ->
-            modal "Import data from a URL" (importBody model)
+            modal config.t.importDataFromUrl (importBody config.t model)
 
         ( QueryDialog, _ ) ->
-            modal "Run a SQL query" (queryBody c model)
+            modal config.t.runSqlQuery (queryBody config.t c model)
 
         _ ->
             text ""
+
+
+{-| The create-time template picker: one card per `config.templates`. -}
+newBody : Config doc docMsg -> Html (Msg docMsg)
+newBody config =
+    div []
+        [ div [ HA.class "ws-templates" ]
+            (List.map templateCard config.templates)
+        , div [ HA.class "ws-modal-actions" ]
+            [ button [ HA.class "ws-btn", HE.onClick CloseDialog ] [ text config.t.cancel ] ]
+        ]
+
+
+templateCard : Template doc -> Html (Msg docMsg)
+templateCard template =
+    button
+        [ HA.class "ws-template-card"
+        , HE.onClick (PickTemplate template.id)
+        ]
+        [ span [ HA.class "ws-template-label" ] [ text template.label ]
+        , span [ HA.class "ws-template-blurb" ] [ text template.blurb ]
+        ]
 
 
 modal : String -> Html (Msg docMsg) -> Html (Msg docMsg)
@@ -1079,38 +1135,38 @@ modal title body =
         ]
 
 
-permissionsBody : Model doc -> Access -> Html (Msg docMsg)
-permissionsBody model access =
+permissionsBody : I18n.T -> Model doc -> Access -> Html (Msg docMsg)
+permissionsBody t model access =
     div []
         [ div [ HA.class "ws-field" ]
-            [ label [ HA.class "ws-label" ] [ text "Visibility" ]
+            [ label [ HA.class "ws-label" ] [ text t.visibility ]
             , select [ HA.class "ws-select", HE.onInput SetVisibility ]
-                [ option [ HA.value "private", HA.selected (access.visibility == Private) ] [ text "Private — only people below" ]
-                , option [ HA.value "public", HA.selected (access.visibility == Public) ] [ text "Public — any logged-in user can read" ]
+                [ option [ HA.value "private", HA.selected (access.visibility == Private) ] [ text t.visibilityPrivate ]
+                , option [ HA.value "public", HA.selected (access.visibility == Public) ] [ text t.visibilityPublic ]
                 ]
             ]
-        , principalSection "Owners (can edit & share)" OwnersRole access.owners
-        , principalSection "Readers (can view)" ReadersRole access.readers
+        , principalSection t.ownersLabel OwnersRole access.owners
+        , principalSection t.readersLabel ReadersRole access.readers
         , div [ HA.class "ws-field" ]
-            [ label [ HA.class "ws-label" ] [ text "Add someone" ]
+            [ label [ HA.class "ws-label" ] [ text t.addSomeone ]
             , div [ HA.class "ws-add-row" ]
                 [ select [ HA.class "ws-select ws-select-kind", HE.onInput SetPrincipalKind ]
-                    [ option [ HA.value "user", HA.selected (model.principalKind == "user") ] [ text "User" ]
-                    , option [ HA.value "group", HA.selected (model.principalKind == "group") ] [ text "Group" ]
+                    [ option [ HA.value "user", HA.selected (model.principalKind == "user") ] [ text t.user ]
+                    , option [ HA.value "group", HA.selected (model.principalKind == "group") ] [ text t.group ]
                     ]
                 , input
                     [ HA.class "ws-input"
-                    , HA.placeholder "id or group name"
+                    , HA.placeholder t.idOrGroupName
                     , HA.value model.principalDraft
                     , HE.onInput SetPrincipalDraft
                     ]
                     []
-                , button [ HA.class "ws-btn", HE.onClick (AddPrincipal OwnersRole) ] [ text "+ Owner" ]
-                , button [ HA.class "ws-btn", HE.onClick (AddPrincipal ReadersRole) ] [ text "+ Reader" ]
+                , button [ HA.class "ws-btn", HE.onClick (AddPrincipal OwnersRole) ] [ text t.addOwner ]
+                , button [ HA.class "ws-btn", HE.onClick (AddPrincipal ReadersRole) ] [ text t.addReader ]
                 ]
             ]
         , div [ HA.class "ws-modal-actions" ]
-            [ button [ HA.class "ws-btn ws-btn-primary", HE.onClick CloseDialog ] [ text "Done" ] ]
+            [ button [ HA.class "ws-btn ws-btn-primary", HE.onClick CloseDialog ] [ text t.done ] ]
         ]
 
 
@@ -1134,11 +1190,11 @@ principalChip role p =
         ]
 
 
-importBody : Model doc -> Html (Msg docMsg)
-importBody model =
+importBody : I18n.T -> Model doc -> Html (Msg docMsg)
+importBody t model =
     div []
         [ div [ HA.class "ws-field" ]
-            [ label [ HA.class "ws-label" ] [ text "Data URL" ]
+            [ label [ HA.class "ws-label" ] [ text t.dataUrl ]
             , input
                 [ HA.class "ws-input"
                 , HA.placeholder "https://example.com/data.json"
@@ -1148,25 +1204,25 @@ importBody model =
                 []
             ]
         , div [ HA.class "ws-field" ]
-            [ label [ HA.class "ws-label" ] [ text "Format" ]
+            [ label [ HA.class "ws-label" ] [ text t.format ]
             , select [ HA.class "ws-select", HE.onInput SetUrlFormat ]
-                [ option [ HA.value "json", HA.selected (model.urlFormat == "json") ] [ text "JSON (array of objects)" ]
-                , option [ HA.value "csv", HA.selected (model.urlFormat == "csv") ] [ text "CSV / TSV" ]
+                [ option [ HA.value "json", HA.selected (model.urlFormat == "json") ] [ text t.formatJsonArray ]
+                , option [ HA.value "csv", HA.selected (model.urlFormat == "csv") ] [ text t.formatCsvTsv ]
                 ]
             ]
         , div [ HA.class "ws-modal-actions" ]
-            [ button [ HA.class "ws-btn ws-btn-primary", HE.onClick SubmitImport ] [ text "Import" ]
-            , button [ HA.class "ws-btn", HE.onClick CloseDialog ] [ text "Cancel" ]
+            [ button [ HA.class "ws-btn ws-btn-primary", HE.onClick SubmitImport ] [ text t.import_ ]
+            , button [ HA.class "ws-btn", HE.onClick CloseDialog ] [ text t.cancel ]
             ]
-        , p [ HA.class "ws-muted" ] [ text "The URL must be reachable from the browser (CORS-enabled)." ]
+        , p [ HA.class "ws-muted" ] [ text t.urlMustBeReachable ]
         ]
 
 
-queryBody : Caps -> Model doc -> Html (Msg docMsg)
-queryBody c model =
+queryBody : I18n.T -> Caps -> Model doc -> Html (Msg docMsg)
+queryBody t c model =
     div []
         [ div [ HA.class "ws-field" ]
-            [ label [ HA.class "ws-label" ] [ text "SQL" ]
+            [ label [ HA.class "ws-label" ] [ text t.sql ]
             , textarea
                 [ HA.class "ws-textarea"
                 , HA.attribute "rows" "5"
@@ -1182,12 +1238,12 @@ queryBody c model =
                 , HA.disabled (not c.hasQuery)
                 , HE.onClick RunQuery
                 ]
-                [ text "Run query" ]
-            , button [ HA.class "ws-btn", HE.onClick CloseDialog ] [ text "Cancel" ]
+                [ text t.runQuery ]
+            , button [ HA.class "ws-btn", HE.onClick CloseDialog ] [ text t.cancel ]
             ]
         , if c.hasQuery then
-            p [ HA.class "ws-muted" ] [ text "The query runs on the workspace's database and the result is added to the document." ]
+            p [ HA.class "ws-muted" ] [ text t.queryRunsOnDatabase ]
 
           else
-            p [ HA.class "ws-muted" ] [ text "This workspace has no database connection, so running is disabled. With a database backend (e.g. in the bbx app) this runs the query and adds the result to the document." ]
+            p [ HA.class "ws-muted" ] [ text t.noDatabaseRunningDisabled ]
         ]

@@ -47,6 +47,7 @@ import Notebook.Value as Value
 import Notebook.View as NbView
 import Set exposing (Set)
 import Workspace
+import Workspace.I18n as WsI18n
 import Workspace.Table as Table
 import Workspace.Types exposing (Table)
 
@@ -337,16 +338,25 @@ type NbMsg
 {-| Host options for an embedded notebook: UI language and which optional affordances to show. -}
 type alias Options =
     { t : I18n.T
+    , wsT : WsI18n.T
+    , templates : List (Workspace.Template NbDoc)
     , showSuggestions : Bool
     , showLessons : Bool
     , showTemplatesButton : Bool
     }
 
 
-{-| The standalone-site defaults: English, with lessons, suggestions and the templates button on. -}
+{-| The standalone-site defaults: English, no create-time templates (the in-editor Templates gallery
+is used instead), with lessons, suggestions and the templates button on. -}
 defaults : Options
 defaults =
-    { t = I18n.en, showSuggestions = True, showLessons = True, showTemplatesButton = True }
+    { t = I18n.en
+    , wsT = WsI18n.en
+    , templates = []
+    , showSuggestions = True
+    , showLessons = True
+    , showTemplatesButton = True
+    }
 
 
 {-| The notebook's workspace configuration. -}
@@ -366,6 +376,8 @@ configWith opts =
     , elementsOf = elementsOf
     , toTable = \nb -> Doc.lastValue nb.doc |> Maybe.andThen Export.valueToTable
     , onImport = Just importTable
+    , t = opts.wsT
+    , templates = opts.templates
     }
 
 
