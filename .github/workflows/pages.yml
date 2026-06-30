@@ -7,7 +7,7 @@ name: Build, test & deploy to GitHub Pages
 # The notebook is written for the elm-lang compiler (github.com/tunguski/elm-lang), which
 # lives in a separate repo, so the build checks that out, packages it into a runnable
 # `elm.jar`, runs the tests, then `elm make` to produce the page. Like the other elm-lang
-# example apps it compiles with --no-check. The deploy is gated on the tests passing.
+# example apps it type-checks and compiles. The deploy is gated on the tests passing.
 
 on:
   push:
@@ -79,7 +79,7 @@ jobs:
       - name: Compile the site to public/index.html
         run: |
           java -jar elm-lang/target/elm.jar make \
-            src/Main.elm --project=elm.json -o public/index.html --no-check
+            src/Main.elm --project=elm.json -o public/index.html
           # The compiler owns the output <head>; add a viewport meta and inline src/notebook.css
           # as a <style> so the page stays a single self-contained file (idempotent on re-runs).
           TITLE=elm-notebook SITECSS=assets/site.css CSSFILE=src/notebook.css perl -0777 -pi -e '

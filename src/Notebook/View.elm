@@ -1647,6 +1647,9 @@ kindClass kind =
         Markdown ->
             "md"
 
+        Input ->
+            "input"
+
 
 
 -- VARIABLES INSPECTOR --------------------------------------------------------
