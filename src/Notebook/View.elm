@@ -28,6 +28,7 @@ import Notebook.Filter as Filter
 import Notebook.Format as Format
 import Notebook.GroupBy as GroupBy
 import Notebook.Heatmap as Heatmap
+import Notebook.I18n as I18n
 import Notebook.Math as Math
 import Notebook.Outline exposing (Heading)
 import Notebook.Overview as Overview
@@ -113,6 +114,7 @@ type alias Config msg =
     , onBars : Int -> Bool -> msg
     , sectionFolded : Int -> Bool
     , onFoldSection : Int -> msg
+    , t : I18n.T
     }
 
 
@@ -234,7 +236,7 @@ foldedCellView config cell =
     div [ HA.id (cellDomId cell.id), HA.class "nb-cell nb-cell-folded" ]
         [ div [ HA.class "nb-gutter" ] [ span [ HA.class "nb-prompt" ] [ text (foldTag cell) ] ]
         , div [ HA.class "nb-body nb-folded-body" ]
-            [ button [ HA.class "nb-btn nb-btn-ghost", HA.title "Expand", HE.onClick (config.onFold cell.id) ]
+            [ button [ HA.class "nb-btn nb-btn-ghost", HA.title config.t.expand, HE.onClick (config.onFold cell.id) ]
                 [ Html.i [ HA.class "bi bi-chevron-right" ] [] ]
             , span [ HA.class "nb-fold-summary" ] [ text (foldSummary cell) ]
             ]
@@ -340,10 +342,10 @@ controlSelect : Config msg -> Cell -> Cell.InputSpec -> Html msg
 controlSelect config cell spec =
     Html.select
         [ HA.class "nb-input-type", HE.onInput (config.onInputControl cell.id) ]
-        [ controlOption "slider" "Slider" (isSlider spec.control)
-        , controlOption "number" "Number" (spec.control == NumberBox)
+        [ controlOption "slider" config.t.slider (isSlider spec.control)
+        , controlOption "number" config.t.number (spec.control == NumberBox)
         , controlOption "text" "Text" (spec.control == TextBox)
-        , controlOption "checkbox" "Checkbox" (spec.control == Checkbox)
+        , controlOption "checkbox" config.t.checkbox (spec.control == Checkbox)
         ]
 
 
@@ -444,7 +446,7 @@ codeCellView config cell =
         [ div [ HA.class "nb-gutter" ]
             [ span [ HA.class "nb-prompt" ] [ text (promptLabel "In" cell.count) ]
             , if stale then
-                span [ HA.class "nb-stale-dot", HA.title "Stale — an upstream cell changed; Run to refresh" ] [ text "●" ]
+                span [ HA.class "nb-stale-dot", HA.title config.t.staleHint ] [ text "●" ]
 
               else
                 text ""
@@ -584,10 +586,10 @@ cellToolbar config cell =
         convertButton =
             case cell.kind of
                 Code ->
-                    toolButton "To text" (config.onConvert cell.id Markdown)
+                    toolButton config.t.toText (config.onConvert cell.id Markdown)
 
                 Markdown ->
-                    toolButton "To code" (config.onConvert cell.id Code)
+                    toolButton config.t.toCode (config.onConvert cell.id Code)
 
                 Input ->
                     text ""
@@ -595,9 +597,9 @@ cellToolbar config cell =
         runGroup =
             case cell.kind of
                 Code ->
-                    [ button [ HA.class "nb-btn nb-btn-run", HE.onClick (config.onRun cell.id) ] [ text "▶ Run" ]
-                    , iconBtn "bi-chevron-bar-up" "Run the cells above" (config.onRunAbove cell.id)
-                    , iconBtn "bi-chevron-bar-down" "Run from here down" (config.onRunBelow cell.id)
+                    [ button [ HA.class "nb-btn nb-btn-run", HE.onClick (config.onRun cell.id) ] [ text config.t.run ]
+                    , iconBtn "bi-chevron-bar-up" config.t.runCellsAbove (config.onRunAbove cell.id)
+                    , iconBtn "bi-chevron-bar-down" config.t.runFromHereDown (config.onRunBelow cell.id)
                     ]
 
                 _ ->
@@ -608,10 +610,10 @@ cellToolbar config cell =
             ++ [ commentMarker config cell
                , div [ HA.class "nb-toolbar-spacer" ] []
                , sectionFoldButton config cell
-               , iconBtn "bi-dash-square" "Collapse" (config.onFold cell.id)
-               , iconBtn "bi-files" "Duplicate" (config.onDuplicate cell.id)
-               , iconBtn "bi-text-indent-left" "Insert cell above" (config.onInsertAbove cell.id)
-               , iconBtn "bi-text-indent-right" "Insert cell below" (config.onInsertBelow cell.id)
+               , iconBtn "bi-dash-square" config.t.collapse (config.onFold cell.id)
+               , iconBtn "bi-files" config.t.duplicate (config.onDuplicate cell.id)
+               , iconBtn "bi-text-indent-left" config.t.insertCellAbove (config.onInsertAbove cell.id)
+               , iconBtn "bi-text-indent-right" config.t.insertCellBelow (config.onInsertBelow cell.id)
                , toolButton "↑" (config.onMoveUp cell.id)
                , toolButton "↓" (config.onMoveDown cell.id)
                , convertButton
@@ -625,10 +627,10 @@ sectionFoldButton : Config msg -> Cell -> Html msg
 sectionFoldButton config cell =
     if headingLevel cell > 0 then
         if config.sectionFolded cell.id then
-            iconBtn "bi-chevron-right" "Expand section" (config.onFoldSection cell.id)
+            iconBtn "bi-chevron-right" config.t.expandSection (config.onFoldSection cell.id)
 
         else
-            iconBtn "bi-chevron-down" "Collapse section" (config.onFoldSection cell.id)
+            iconBtn "bi-chevron-down" config.t.collapseSection (config.onFoldSection cell.id)
 
     else
         text ""
@@ -641,7 +643,7 @@ commentMarker config cell =
             config.commentCountOf cell.id
     in
     if config.commentsVisible && n > 0 then
-        span [ HA.class "nb-comment-marker", HA.title "This cell has comments" ]
+        span [ HA.class "nb-comment-marker", HA.title config.t.hasComments ]
             [ Html.i [ HA.class "bi bi-chat-dots" ] [], text (" " ++ String.fromInt n) ]
 
     else
@@ -673,7 +675,7 @@ outputArea config cell =
                         Just fix ->
                             button
                                 [ HA.class "nb-fix"
-                                , HA.title "Replace it and re-run"
+                                , HA.title config.t.replaceAndRerun
                                 , HE.onClick (config.onFix cell.id fix.fixed)
                                 ]
                                 [ Html.i [ HA.class "bi bi-magic" ] [], text (" " ++ fix.label) ]
@@ -759,9 +761,9 @@ pivotView config cell value spec =
     in
     div [ HA.class "nb-pivot" ]
         [ div [ HA.class "nb-pivot-controls" ]
-            [ pick "Rows" cols spec.row (config.onPivotRow cell.id)
-            , pick "Columns" cols spec.column (config.onPivotColumn cell.id)
-            , pick "Value" cols spec.value (config.onPivotValue cell.id)
+            [ pick config.t.rows cols spec.row (config.onPivotRow cell.id)
+            , pick config.t.columnsControl cols spec.column (config.onPivotColumn cell.id)
+            , pick config.t.value cols spec.value (config.onPivotValue cell.id)
             , pick "" (List.map Pivot.aggLabel Pivot.aggs) (Pivot.aggLabel spec.agg) (config.onPivotAgg cell.id)
             ]
         , wrapTable
@@ -805,8 +807,8 @@ groupView config cell value spec =
     in
     div [ HA.class "nb-pivot" ]
         [ div [ HA.class "nb-pivot-controls" ]
-            [ pick "Group by" cols spec.key (config.onGroupKey cell.id)
-            , pick "Value" cols spec.value (config.onGroupValue cell.id)
+            [ pick config.t.groupBy cols spec.key (config.onGroupKey cell.id)
+            , pick config.t.value cols spec.value (config.onGroupValue cell.id)
             , pick "" (List.map Pivot.aggLabel Pivot.aggs) (Pivot.aggLabel spec.agg) (config.onGroupAgg cell.id)
             ]
         , wrapTable
@@ -988,7 +990,7 @@ interactiveTable config cell value =
             thead []
                 [ tr []
                     (List.map
-                        (\c -> th [ HA.class "nb-th-sort", HA.title "Sort by this column", HE.onClick (config.onSort cell.id c) ] [ text (c ++ sortMark c) ])
+                        (\c -> th [ HA.class "nb-th-sort", HA.title config.t.sortByColumn, HE.onClick (config.onSort cell.id c) ] [ text (c ++ sortMark c) ])
                         visibleCols
                     )
                 ]
@@ -1022,7 +1024,7 @@ interactiveTable config cell value =
         [ div [ HA.class "nb-table-controls" ]
             [ input
                 [ HA.class "nb-table-filter"
-                , HA.placeholder "Filter rows…"
+                , HA.placeholder config.t.filterRows
                 , HA.value filter
                 , HA.attribute "spellcheck" "false"
                 , HE.onInput (config.onFilter cell.id)
@@ -1033,17 +1035,17 @@ interactiveTable config cell value =
                 text ""
 
               else
-                tableChip "Heat" heat (config.onHeat cell.id (not heat))
+                tableChip config.t.heat heat (config.onHeat cell.id (not heat))
             , if List.isEmpty numCols then
                 text ""
 
               else
-                tableChip "Bars" bars (config.onBars cell.id (not bars))
+                tableChip config.t.bars bars (config.onBars cell.id (not bars))
             , if List.isEmpty numCols then
                 text ""
 
               else
-                tableChip "Σ Summary" foot (config.onFooter cell.id (not foot))
+                tableChip config.t.summary foot (config.onFooter cell.id (not foot))
             , if List.isEmpty numCols then
                 text ""
 
@@ -1057,10 +1059,10 @@ interactiveTable config cell value =
             button [ HA.class "nb-table-more", HE.onClick (config.onExpand cell.id (not expanded)) ]
                 [ text
                     (if expanded then
-                        "Show fewer"
+                        config.t.showFewer
 
                      else
-                        "Show all " ++ String.fromInt total ++ " rows"
+                        config.t.showAll ++ String.fromInt total ++ " rows"
                     )
                 ]
 
@@ -1101,7 +1103,7 @@ columnToggles config cell cols hidden =
 
     else
         div [ HA.class "nb-col-toggles" ]
-            (span [ HA.class "nb-col-label" ] [ text "columns:" ]
+            (span [ HA.class "nb-col-label" ] [ text config.t.columns ]
                 :: List.map
                     (\c ->
                         button
@@ -1116,10 +1118,10 @@ columnToggles config cell cols hidden =
                                 )
                             , HA.title
                                 (if Set.member c hidden then
-                                    "Show this column"
+                                    config.t.showColumn
 
                                  else
-                                    "Hide this column"
+                                    config.t.hideColumn
                                 )
                             , HE.onClick (config.onToggleCol cell.id c)
                             ]
@@ -1136,7 +1138,7 @@ filterBuilder config cell cols clauses =
     div [ HA.class "nb-filters" ]
         (List.indexedMap (filterClause config cell cols) clauses
             ++ [ button [ HA.class "nb-chip nb-table-chip", HE.onClick (config.onAddFilter cell.id) ]
-                    [ Html.i [ HA.class "bi bi-funnel" ] [], text " filter" ]
+                    [ Html.i [ HA.class "bi bi-funnel" ] [], text config.t.filterSuffix ]
                ]
         )
 
@@ -1145,15 +1147,15 @@ filterClause : Config msg -> Cell -> List String -> Int -> Filter.Clause -> Html
 filterClause config cell cols i clause =
     div [ HA.class "nb-filter-row" ]
         [ Html.select [ HA.class "nb-chart-col", HE.onInput (config.onFilterCol cell.id i) ]
-            (Html.option [ HA.value "", HA.selected (clause.col == "") ] [ text "column…" ]
+            (Html.option [ HA.value "", HA.selected (clause.col == "") ] [ text config.t.columnPlaceholder ]
                 :: List.map (\c -> Html.option [ HA.value c, HA.selected (c == clause.col) ] [ text c ]) cols
             )
         , Html.select [ HA.class "nb-chart-col", HE.onInput (config.onFilterOp cell.id i) ]
             (List.map (\o -> Html.option [ HA.value (Filter.opLabel o), HA.selected (o == clause.op) ] [ text (Filter.opLabel o) ]) Filter.ops)
         , input
-            [ HA.class "nb-filter-value", HA.placeholder "value", HA.value clause.value, HA.attribute "spellcheck" "false", HE.onInput (config.onFilterValue cell.id i) ]
+            [ HA.class "nb-filter-value", HA.placeholder config.t.valuePlaceholder, HA.value clause.value, HA.attribute "spellcheck" "false", HE.onInput (config.onFilterValue cell.id i) ]
             []
-        , button [ HA.class "nb-action nb-action-icon", HA.title "Remove filter", HE.onClick (config.onRemoveFilter cell.id i) ]
+        , button [ HA.class "nb-action nb-action-icon", HA.title config.t.removeFilter, HE.onClick (config.onRemoveFilter cell.id i) ]
             [ Html.i [ HA.class "bi bi-x" ] [] ]
         ]
 
@@ -1383,17 +1385,17 @@ chartToggle config cell value =
 
             tableChips =
                 if Value.isTable value then
-                    [ chip "Profile" profileOn (config.onProfile cell.id (not profileOn))
-                    , chip "Group" groupOn (config.onGroup cell.id (not groupOn))
-                    , chip "Pivot" pivotOn (config.onPivot cell.id (not pivotOn))
-                    , chip "Corr" corrOn (config.onCorr cell.id (not corrOn))
+                    [ chip config.t.profile profileOn (config.onProfile cell.id (not profileOn))
+                    , chip config.t.group groupOn (config.onGroup cell.id (not groupOn))
+                    , chip config.t.pivot pivotOn (config.onPivot cell.id (not pivotOn))
+                    , chip config.t.corr corrOn (config.onCorr cell.id (not corrOn))
                     ]
 
                 else
                     []
         in
         div [ HA.class "nb-chart-toggle" ]
-            (chip "Table" (current == Nothing && not special) (config.onChart cell.id Nothing)
+            (chip config.t.table (current == Nothing && not special) (config.onChart cell.id Nothing)
                 :: kindChips
                 ++ tableChips
                 ++ [ columnPicker config cell value current ]
@@ -1615,12 +1617,12 @@ itemsOf value =
 
 
 {-| The side-panel of context-aware next steps. -}
-suggestionsPanel : (Suggestion -> msg) -> List Suggestion -> Html msg
-suggestionsPanel onInsert items =
+suggestionsPanel : I18n.T -> (Suggestion -> msg) -> List Suggestion -> Html msg
+suggestionsPanel t onInsert items =
     div [ HA.class "nb-suggest" ]
-        [ h3 [ HA.class "nb-suggest-title" ] [ text "Suggested next steps" ]
+        [ h3 [ HA.class "nb-suggest-title" ] [ text t.suggestedNextSteps ]
         , p [ HA.class "nb-suggest-lead" ]
-            [ text "Based on your last result. Click one to add it as a new cell." ]
+            [ text t.suggestedLead ]
         , div [ HA.class "nb-suggest-list" ] (List.map (suggestionCard onInsert) items)
         ]
 
@@ -1662,21 +1664,21 @@ cellDomId id =
 
 
 {-| A compact "Notebook" summary card: cell / variable / error counts and a rough reading time. -}
-overviewPanel : Doc -> Html msg
-overviewPanel doc =
+overviewPanel : I18n.T -> Doc -> Html msg
+overviewPanel t doc =
     let
         s =
             Overview.of_ doc
     in
     div [ HA.class "nb-overview" ]
-        [ h3 [ HA.class "nb-overview-title" ] [ text "Notebook" ]
-        , overviewRow "Cells" (String.fromInt s.cells)
-        , overviewRow "Code" (String.fromInt s.code)
-        , overviewRow "Text" (String.fromInt s.text)
-        , overviewRow "Variables" (String.fromInt s.variables)
-        , overviewRow "Errors" (String.fromInt s.errors)
-        , overviewRow "Words" (String.fromInt s.words)
-        , overviewRow "Read" (String.fromInt s.readMins ++ " min")
+        [ h3 [ HA.class "nb-overview-title" ] [ text t.overviewTitle ]
+        , overviewRow t.ovCells (String.fromInt s.cells)
+        , overviewRow t.ovCode (String.fromInt s.code)
+        , overviewRow t.ovText (String.fromInt s.text)
+        , overviewRow t.ovVariables (String.fromInt s.variables)
+        , overviewRow t.ovErrors (String.fromInt s.errors)
+        , overviewRow t.ovWords (String.fromInt s.words)
+        , overviewRow t.ovRead (String.fromInt s.readMins ++ " " ++ t.minutesSuffix)
         ]
 
 
@@ -1690,14 +1692,14 @@ overviewRow label value =
 
 {-| The outline: the notebook's Markdown headings as jump links, indented by level. Hidden when
 there are none. -}
-outlinePanel : List Heading -> Html msg
-outlinePanel hs =
+outlinePanel : I18n.T -> List Heading -> Html msg
+outlinePanel t hs =
     if List.isEmpty hs then
         text ""
 
     else
         div [ HA.class "nb-outline" ]
-            (h3 [ HA.class "nb-outline-title" ] [ text "Outline" ]
+            (h3 [ HA.class "nb-outline-title" ] [ text t.outlineTitle ]
                 :: List.map outlineLink hs
             )
 
@@ -1714,21 +1716,21 @@ outlineLink heading =
 {-| A panel listing the user's kernel bindings (name · type · value preview). Clicking one inserts
 a cell that references it.
 -}
-variablesPanel : (String -> msg) -> List ( String, Value ) -> Html msg
-variablesPanel onPick vars =
+variablesPanel : I18n.T -> (String -> msg) -> List ( String, Value ) -> Html msg
+variablesPanel t onPick vars =
     div [ HA.class "nb-vars" ]
-        [ h3 [ HA.class "nb-vars-title" ] [ text "Variables" ]
+        [ h3 [ HA.class "nb-vars-title" ] [ text t.variablesTitle ]
         , if List.isEmpty vars then
-            p [ HA.class "nb-vars-empty" ] [ text "Names you define with = appear here." ]
+            p [ HA.class "nb-vars-empty" ] [ text t.variablesEmpty ]
 
           else
-            div [ HA.class "nb-vars-list" ] (List.map (variableRow onPick) vars)
+            div [ HA.class "nb-vars-list" ] (List.map (variableRow t onPick) vars)
         ]
 
 
-variableRow : (String -> msg) -> ( String, Value ) -> Html msg
-variableRow onPick ( name, value ) =
-    button [ HA.class "nb-var", HA.title ("Insert a cell for " ++ name), HE.onClick (onPick name) ]
+variableRow : I18n.T -> (String -> msg) -> ( String, Value ) -> Html msg
+variableRow t onPick ( name, value ) =
+    button [ HA.class "nb-var", HA.title (t.insertCellFor name), HE.onClick (onPick name) ]
         [ span [ HA.class "nb-var-name" ] [ text name ]
         , span [ HA.class "nb-var-type" ] [ text (Value.typeName value) ]
         , span [ HA.class "nb-var-val" ] [ text (preview value) ]
@@ -1737,8 +1739,8 @@ variableRow onPick ( name, value ) =
 
 {-| A panel summarising the cells currently in error (their `In [n]` and the first line of the
 message). Clicking one re-runs that cell. Hidden when there are no errors. -}
-errorsPanel : (Int -> msg) -> List ( Int, Int, String ) -> Html msg
-errorsPanel onRun errors =
+errorsPanel : I18n.T -> (Int -> msg) -> List ( Int, Int, String ) -> Html msg
+errorsPanel t onRun errors =
     if List.isEmpty errors then
         text ""
 
@@ -1746,15 +1748,15 @@ errorsPanel onRun errors =
         div [ HA.class "nb-errors" ]
             (h3 [ HA.class "nb-errors-title" ]
                 [ Html.i [ HA.class "bi bi-exclamation-triangle" ] []
-                , text (" " ++ String.fromInt (List.length errors) ++ " in error")
+                , text (t.errorsCount (List.length errors))
                 ]
-                :: List.map (errorRow onRun) errors
+                :: List.map (errorRow t onRun) errors
             )
 
 
-errorRow : (Int -> msg) -> ( Int, Int, String ) -> Html msg
-errorRow onRun ( id, count, message ) =
-    button [ HA.class "nb-error-row", HA.title "Re-run this cell", HE.onClick (onRun id) ]
+errorRow : I18n.T -> (Int -> msg) -> ( Int, Int, String ) -> Html msg
+errorRow t onRun ( id, count, message ) =
+    button [ HA.class "nb-error-row", HA.title t.rerunThisCell, HE.onClick (onRun id) ]
         [ span [ HA.class "nb-error-prompt" ] [ text (promptLabel "In" (Just count)) ]
         , span [ HA.class "nb-error-msg" ] [ text (firstLine message) ]
         ]

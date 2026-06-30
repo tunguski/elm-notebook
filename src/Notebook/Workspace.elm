@@ -1,4 +1,4 @@
-module Notebook.Workspace exposing (NbDoc, NbMsg, config, examples, examplesView, updateNb, isCopyToWorkspace)
+module Notebook.Workspace exposing (NbDoc, NbMsg, Options, defaults, config, configWith, empty, fromSpec, examples, examplesView, updateNb, isCopyToWorkspace)
 
 {-| The notebook seen as a **workspace document**: this module adapts the notebook engine
 ([`Notebook.Doc`](Notebook-Doc) / [`Cell`](Notebook-Cell) / [`Kernel`](Notebook-Kernel) /
@@ -32,6 +32,7 @@ import Notebook.Filter as Filter
 import Notebook.Format as Format
 import Notebook.GroupBy as GroupBy
 import Notebook.Hint as Hint
+import Notebook.I18n as I18n
 import Notebook.Import as Import
 import Notebook.Kernel as Kernel
 import Notebook.Outline as Outline
@@ -221,22 +222,22 @@ removeAt i xs =
 
 
 {-| The actions offered in the command palette, in order; `PaletteRun i` runs the i-th. -}
-paletteActions : List ( String, NbMsg )
-paletteActions =
-    [ ( "Run all", RunAll )
-    , ( "Add code cell", AddCode )
-    , ( "Add text cell", AddMarkdown )
-    , ( "Add input", AddInput )
-    , ( "Clear outputs", Clear )
-    , ( "Find & replace", OpenFind )
-    , ( "Function reference", OpenRef )
-    , ( "Import data", OpenImport )
-    , ( "New from template", OpenTemplates )
-    , ( "Slideshow", ToggleSlides )
-    , ( "Share link", OpenShare )
-    , ( "Toggle report mode", ToggleReport )
-    , ( "Undo", Undo )
-    , ( "Redo", Redo )
+paletteActions : I18n.T -> List ( String, NbMsg )
+paletteActions t =
+    [ ( t.paRunAll, RunAll )
+    , ( t.paAddCode, AddCode )
+    , ( t.paAddText, AddMarkdown )
+    , ( t.paAddInput, AddInput )
+    , ( t.paClearOutputs, Clear )
+    , ( t.paFindReplace, OpenFind )
+    , ( t.paFunctionReference, OpenRef )
+    , ( t.paImportData, OpenImport )
+    , ( t.paNewFromTemplate, OpenTemplates )
+    , ( t.paSlideshow, ToggleSlides )
+    , ( t.paShareLink, OpenShare )
+    , ( t.paToggleReport, ToggleReport )
+    , ( t.paUndo, Undo )
+    , ( t.paRedo, Redo )
     ]
 
 
@@ -333,14 +334,34 @@ type NbMsg
 -- CONFIG ---------------------------------------------------------------------
 
 
+{-| Host options for an embedded notebook: UI language and which optional affordances to show. -}
+type alias Options =
+    { t : I18n.T
+    , showSuggestions : Bool
+    , showLessons : Bool
+    , showTemplatesButton : Bool
+    }
+
+
+{-| The standalone-site defaults: English, with lessons, suggestions and the templates button on. -}
+defaults : Options
+defaults =
+    { t = I18n.en, showSuggestions = True, showLessons = True, showTemplatesButton = True }
+
+
 {-| The notebook's workspace configuration. -}
 config : Workspace.Config NbDoc NbMsg
 config =
+    configWith defaults
+
+
+configWith : Options -> Workspace.Config NbDoc NbMsg
+configWith opts =
     { codec = { encode = \nb -> Serialize.encodeDoc nb.doc, decoder = decoder }
     , empty = empty
     , kind = "notebook"
     , activate = \nb -> { nb | doc = Doc.runAll nb.doc }
-    , viewDoc = viewNb False
+    , viewDoc = viewNb opts False
     , updateDoc = updateNb
     , elementsOf = elementsOf
     , toTable = \nb -> Doc.lastValue nb.doc |> Maybe.andThen Export.valueToTable
@@ -394,11 +415,11 @@ empty =
     }
 
 
-{-| The starter notebook used by the standalone playground (the site's "examples" landing) — the
-guided starter run and ready to explore, without any workspace chrome. -}
-examples : NbDoc
-examples =
-    { doc = Doc.fromSpec Suggest.starter |> Doc.runAll
+{-| Build a fresh notebook document from a cell spec (kinds + sources), run, with empty editor
+state. Hosts use this to offer starting **templates** (see [`Workspace.Config.templates`](Workspace#Config)). -}
+fromSpec : List ( CellKind, String ) -> NbDoc
+fromSpec spec =
+    { doc = Doc.fromSpec spec |> Doc.runAll
     , carets = Dict.empty
     , charts = Dict.empty
     , cols = Dict.empty
@@ -428,16 +449,23 @@ examples =
     , folded = Set.empty
     , foldedSections = Set.empty
     , dark = False
-    , lesson = "starter"
+    , lesson = ""
     , stale = Set.empty
     }
+
+
+{-| The starter notebook used by the standalone playground (the site's "examples" landing) — the
+guided starter run and ready to explore, without any workspace chrome. -}
+examples : NbDoc
+examples =
+    { fromSpec Suggest.starter | lesson = "starter" }
 
 
 {-| Render a notebook as a standalone playground (no comments, no workspace chrome), with a
 "Copy to workspace" action in its toolbars. -}
 examplesView : NbDoc -> Html NbMsg
 examplesView nb =
-    viewNb True { comments = Dict.empty, commentsVisible = False, commentCount = always 0 } nb
+    viewNb defaults True { comments = Dict.empty, commentsVisible = False, commentCount = always 0 } nb
 
 
 elementsOf : NbDoc -> List ( String, String )
@@ -766,7 +794,7 @@ step msg nb =
             { nb | palette = Nothing }
 
         PaletteRun i ->
-            case List.head (List.drop i paletteActions) of
+            case List.head (List.drop i (paletteActions I18n.en)) of
                 Just ( _, actionMsg ) ->
                     updateNb actionMsg { nb | palette = Nothing }
 
@@ -1053,17 +1081,21 @@ parseControl name =
 -- VIEW -----------------------------------------------------------------------
 
 
-viewNb : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
-viewNb showCopy env nb =
+viewNb : Options -> Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
+viewNb opts showCopy env nb =
     if nb.slideshow then
-        slideshowView env nb
+        slideshowView opts env nb
 
     else
-        editView showCopy env nb
+        editView opts showCopy env nb
 
 
-editView : Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
-editView showCopy env nb =
+editView : Options -> Bool -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
+editView opts showCopy env nb =
+    let
+        t =
+            opts.t
+    in
     div
         [ HA.class
             ("nb-workspace"
@@ -1076,44 +1108,48 @@ editView showCopy env nb =
                 ++ themeClass nb
             )
         ]
-        [ if nb.report then
+        [ if nb.report || not opts.showLessons then
             text ""
 
           else
-            lessonBar nb.lesson
-        , toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
-        , findBar nb.find nb.doc
-        , refPanel nb.ref
-        , palettePanel nb.palette
-        , sharePanel nb.share nb.doc
-        , templatePanel nb.templates
-        , pastePanel nb.paste
+            lessonBar t nb.lesson
+        , toolbar opts showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
+        , findBar t nb.find nb.doc
+        , refPanel t nb.ref
+        , palettePanel t nb.palette
+        , sharePanel t nb.share nb.doc
+        , templatePanel t nb.templates
+        , pastePanel t nb.paste
         , section [ HA.class "nb-main" ]
             [ div [ HA.class "nb-notebook" ]
-                [ NbView.notebook (viewConfig env nb) nb.doc
+                [ NbView.notebook (viewConfig opts env nb) nb.doc
                 , if nb.report then
                     text ""
 
                   else
-                    toolbar showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
+                    toolbar opts showCopy (Set.size nb.stale) nb.report (not (List.isEmpty nb.past)) (not (List.isEmpty nb.future)) nb.doc
                 ]
             , if nb.report then
                 text ""
 
               else
                 div [ HA.class "nb-sidebar" ]
-                    [ NbView.errorsPanel Run (errorList nb.doc)
-                    , NbView.overviewPanel nb.doc
-                    , NbView.outlinePanel (Outline.headings nb.doc)
-                    , NbView.suggestionsPanel Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
-                    , NbView.variablesPanel InsertName (Doc.variables nb.doc)
+                    [ NbView.errorsPanel t Run (errorList nb.doc)
+                    , NbView.overviewPanel t nb.doc
+                    , NbView.outlinePanel t (Outline.headings nb.doc)
+                    , if opts.showSuggestions then
+                        NbView.suggestionsPanel t Insert (Suggest.suggestNext (Doc.lastValue nb.doc))
+
+                      else
+                        text ""
+                    , NbView.variablesPanel t InsertName (Doc.variables nb.doc)
                     ]
             ]
         ]
 
 
-viewConfig : Workspace.EditorEnv -> NbDoc -> NbView.Config NbMsg
-viewConfig env nb =
+viewConfig : Options -> Workspace.EditorEnv -> NbDoc -> NbView.Config NbMsg
+viewConfig opts env nb =
     { onEdit = Edit
     , onRun = Run
     , onDelete = DeleteCell
@@ -1186,6 +1222,7 @@ viewConfig env nb =
     , onFilterCol = SetFilterCol
     , onFilterOp = SetFilterOp
     , onFilterValue = SetFilterValue
+    , t = opts.t
     }
 
 
@@ -1265,16 +1302,16 @@ exportCell cell =
             text ""
 
 
-reportToggle : Bool -> Html NbMsg
-reportToggle report =
+reportToggle : I18n.T -> Bool -> Html NbMsg
+reportToggle t report =
     button [ HA.class "nb-action nb-action-report", HE.onClick ToggleReport ]
         [ Html.i [ HA.class ("bi " ++ iconFor report) ] []
         , text
             (if report then
-                " Edit"
+                t.editMode
 
              else
-                " Report"
+                t.reportMode
             )
         ]
 
@@ -1289,9 +1326,9 @@ themeClass nb =
         ""
 
 
-themeToggle : Html NbMsg
-themeToggle =
-    button [ HA.class "nb-action nb-action-icon", HA.title "Toggle dark mode", HE.onClick ToggleTheme ]
+themeToggle : I18n.T -> Html NbMsg
+themeToggle t =
+    button [ HA.class "nb-action nb-action-icon", HA.title t.toggleDark, HE.onClick ToggleTheme ]
         [ Html.i [ HA.class "bi bi-circle-half" ] [] ]
 
 
@@ -1304,51 +1341,59 @@ iconFor report =
         "bi-easel"
 
 
-undoButtons : Bool -> Bool -> List (Html NbMsg)
-undoButtons canUndo canRedo =
-    [ button [ HA.class "nb-action nb-action-icon", HA.disabled (not canUndo), HA.title "Undo", HE.onClick Undo ]
+undoButtons : I18n.T -> Bool -> Bool -> List (Html NbMsg)
+undoButtons t canUndo canRedo =
+    [ button [ HA.class "nb-action nb-action-icon", HA.disabled (not canUndo), HA.title t.undo, HE.onClick Undo ]
         [ Html.i [ HA.class "bi bi-arrow-counterclockwise" ] [] ]
-    , button [ HA.class "nb-action nb-action-icon", HA.disabled (not canRedo), HA.title "Redo", HE.onClick Redo ]
+    , button [ HA.class "nb-action nb-action-icon", HA.disabled (not canRedo), HA.title t.redo, HE.onClick Redo ]
         [ Html.i [ HA.class "bi bi-arrow-clockwise" ] [] ]
     ]
 
 
-toolbar : Bool -> Int -> Bool -> Bool -> Bool -> Doc -> Html NbMsg
-toolbar showCopy staleCount report canUndo canRedo doc =
+toolbar : Options -> Bool -> Int -> Bool -> Bool -> Bool -> Doc -> Html NbMsg
+toolbar opts showCopy staleCount report canUndo canRedo doc =
+    let
+        t =
+            opts.t
+    in
     if report then
         section [ HA.class "nb-actions" ]
-            [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ]
-            , themeToggle
-            , reportToggle report
+            [ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text t.runAll ]
+            , themeToggle t
+            , reportToggle t report
             ]
 
     else
         section [ HA.class "nb-actions" ]
-        ([ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text "▶▶ Run all" ] ]
-            ++ undoButtons canUndo canRedo
+        ([ button [ HA.class "nb-action nb-action-primary", HE.onClick RunAll ] [ text t.runAll ] ]
+            ++ undoButtons t canUndo canRedo
             ++ [ if staleCount > 0 then
-            button [ HA.class "nb-action nb-action-stale", HE.onClick RunStale, HA.title "Re-run the cells affected by your edits" ]
+            button [ HA.class "nb-action nb-action-stale", HE.onClick RunStale, HA.title t.rerunAffected ]
                 [ Html.i [ HA.class "bi bi-arrow-repeat" ] [], text (" Run stale (" ++ String.fromInt staleCount ++ ")") ]
 
           else
             text ""
-        , button [ HA.class "nb-action", HE.onClick AddCode ] [ text "+ Code cell" ]
-        , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text "+ Text cell" ]
-        , button [ HA.class "nb-action", HE.onClick AddInput ] [ text "+ Input" ]
-        , button [ HA.class "nb-action", HE.onClick OpenImport ] [ Html.i [ HA.class "bi bi-clipboard-data" ] [], text " Import data" ]
-        , button [ HA.class "nb-action", HE.onClick OpenFind ] [ Html.i [ HA.class "bi bi-search" ] [], text " Find" ]
-        , button [ HA.class "nb-action", HE.onClick OpenRef ] [ Html.i [ HA.class "bi bi-journal-code" ] [], text " Reference" ]
-        , button [ HA.class "nb-action", HE.onClick OpenPalette ] [ Html.i [ HA.class "bi bi-command" ] [], text " Actions" ]
-        , button [ HA.class "nb-action", HE.onClick OpenTemplates ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text " Templates" ]
-        , button [ HA.class "nb-action", HE.onClick ToggleSlides ] [ Html.i [ HA.class "bi bi-easel2" ] [], text " Slides" ]
-        , button [ HA.class "nb-action", HE.onClick OpenShare ] [ Html.i [ HA.class "bi bi-share" ] [], text " Share" ]
-        , button [ HA.class "nb-action", HE.onClick Clear ] [ text "Clear outputs" ]
+        , button [ HA.class "nb-action", HE.onClick AddCode ] [ text t.addCode ]
+        , button [ HA.class "nb-action", HE.onClick AddMarkdown ] [ text t.addText ]
+        , button [ HA.class "nb-action", HE.onClick AddInput ] [ text t.addInput ]
+        , button [ HA.class "nb-action", HE.onClick OpenImport ] [ Html.i [ HA.class "bi bi-clipboard-data" ] [], text t.importData ]
+        , button [ HA.class "nb-action", HE.onClick OpenFind ] [ Html.i [ HA.class "bi bi-search" ] [], text t.find ]
+        , button [ HA.class "nb-action", HE.onClick OpenRef ] [ Html.i [ HA.class "bi bi-journal-code" ] [], text t.reference ]
+        , button [ HA.class "nb-action", HE.onClick OpenPalette ] [ Html.i [ HA.class "bi bi-command" ] [], text t.actions ]
+        , if opts.showTemplatesButton then
+            button [ HA.class "nb-action", HE.onClick OpenTemplates ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text t.templates ]
+
+          else
+            text ""
+        , button [ HA.class "nb-action", HE.onClick ToggleSlides ] [ Html.i [ HA.class "bi bi-easel2" ] [], text t.slides ]
+        , button [ HA.class "nb-action", HE.onClick OpenShare ] [ Html.i [ HA.class "bi bi-share" ] [], text t.share ]
+        , button [ HA.class "nb-action", HE.onClick Clear ] [ text t.clearOutputs ]
         , span [ HA.class "nb-action-export" ] [ Export.notebookLinks doc ]
-        , themeToggle
-            , reportToggle report
+        , themeToggle t
+            , reportToggle t report
         , if showCopy then
             button [ HA.class "nb-action nb-action-copy", HE.onClick CopyToWorkspaceRequested ]
-                [ Html.i [ HA.class "bi bi-folder-plus" ] [], text " Copy to workspace" ]
+                [ Html.i [ HA.class "bi bi-folder-plus" ] [], text t.copyToWorkspace ]
 
           else
             text ""
@@ -1358,8 +1403,8 @@ toolbar showCopy staleCount report canUndo canRedo doc =
 
 {-| The function reference: a search box over the prelude + stdlib catalog; clicking an entry appends
 a code cell with its snippet. -}
-refPanel : Maybe String -> Html NbMsg
-refPanel ref =
+refPanel : I18n.T -> Maybe String -> Html NbMsg
+refPanel t ref =
     case ref of
         Nothing ->
             text ""
@@ -1369,9 +1414,9 @@ refPanel ref =
                 [ div [ HA.class "nb-ref-head" ]
                     [ Html.i [ HA.class "bi bi-journal-code" ] []
                     , Html.input
-                        [ HA.class "nb-ref-search", HA.placeholder "Search functions…", HA.value query, HA.attribute "spellcheck" "false", HE.onInput SetRefQuery ]
+                        [ HA.class "nb-ref-search", HA.placeholder t.searchFunctions, HA.value query, HA.attribute "spellcheck" "false", HE.onInput SetRefQuery ]
                         []
-                    , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseRef ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                    , button [ HA.class "nb-action nb-action-icon", HA.title t.close, HE.onClick CloseRef ] [ Html.i [ HA.class "bi bi-x" ] [] ]
                     ]
                 , div [ HA.class "nb-ref-list" ] (List.map refEntry (Reference.search query))
                 ]
@@ -1387,8 +1432,8 @@ refEntry entry =
 
 {-| The command palette: a search box over [`paletteActions`](#paletteActions); clicking one runs it
 and closes the palette. -}
-palettePanel : Maybe String -> Html NbMsg
-palettePanel palette =
+palettePanel : I18n.T -> Maybe String -> Html NbMsg
+palettePanel t palette =
     case palette of
         Nothing ->
             text ""
@@ -1399,16 +1444,16 @@ palettePanel palette =
                     String.toLower (String.trim query)
 
                 shown =
-                    List.indexedMap (\i pair -> ( i, pair )) paletteActions
+                    List.indexedMap (\i pair -> ( i, pair )) (paletteActions t)
                         |> List.filter (\( _, ( label, _ ) ) -> q == "" || String.contains q (String.toLower label))
             in
             section [ HA.class "nb-palette" ]
                 [ div [ HA.class "nb-palette-head" ]
                     [ Html.i [ HA.class "bi bi-command" ] []
                     , Html.input
-                        [ HA.class "nb-palette-search", HA.placeholder "Type an action…", HA.value query, HA.attribute "spellcheck" "false", HE.onInput SetPaletteQuery ]
+                        [ HA.class "nb-palette-search", HA.placeholder t.palettePlaceholder, HA.value query, HA.attribute "spellcheck" "false", HE.onInput SetPaletteQuery ]
                         []
-                    , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick ClosePalette ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                    , button [ HA.class "nb-action nb-action-icon", HA.title t.close, HE.onClick ClosePalette ] [ Html.i [ HA.class "bi bi-x" ] [] ]
                     ]
                 , div [ HA.class "nb-palette-list" ] (List.map paletteItem shown)
                 ]
@@ -1420,8 +1465,8 @@ paletteItem ( i, ( label, _ ) ) =
 
 
 {-| The find / replace bar: a query + replacement, a live count of matching cells, and replace-all. -}
-findBar : Maybe ( String, String ) -> Doc -> Html NbMsg
-findBar find doc =
+findBar : I18n.T -> Maybe ( String, String ) -> Doc -> Html NbMsg
+findBar t find doc =
     case find of
         Nothing ->
             text ""
@@ -1434,10 +1479,10 @@ findBar find doc =
             section [ HA.class "nb-find" ]
                 [ Html.i [ HA.class "bi bi-search" ] []
                 , Html.input
-                    [ HA.class "nb-find-input", HA.placeholder "Find in cells…", HA.value q, HA.attribute "spellcheck" "false", HE.onInput SetFindQuery ]
+                    [ HA.class "nb-find-input", HA.placeholder t.findInCells, HA.value q, HA.attribute "spellcheck" "false", HE.onInput SetFindQuery ]
                     []
                 , Html.input
-                    [ HA.class "nb-find-input", HA.placeholder "Replace with…", HA.value r, HA.attribute "spellcheck" "false", HE.onInput SetFindReplace ]
+                    [ HA.class "nb-find-input", HA.placeholder t.replaceWith, HA.value r, HA.attribute "spellcheck" "false", HE.onInput SetFindReplace ]
                     []
                 , span [ HA.class "nb-find-count" ]
                     [ text
@@ -1454,14 +1499,14 @@ findBar find doc =
                                    )
                         )
                     ]
-                , button [ HA.class "nb-action", HE.onClick ReplaceAll ] [ text "Replace all" ]
-                , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseFind ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                , button [ HA.class "nb-action", HE.onClick ReplaceAll ] [ text t.replaceAll ]
+                , button [ HA.class "nb-action nb-action-icon", HA.title t.close, HE.onClick CloseFind ] [ Html.i [ HA.class "bi bi-x" ] [] ]
                 ]
 
 
 {-| The "Paste data" panel: a name + a textarea that auto-detects JSON vs CSV/TSV on import. -}
-pastePanel : Maybe ( String, String ) -> Html NbMsg
-pastePanel paste =
+pastePanel : I18n.T -> Maybe ( String, String ) -> Html NbMsg
+pastePanel t paste =
     case paste of
         Nothing ->
             text ""
@@ -1469,9 +1514,9 @@ pastePanel paste =
         Just ( name, txt ) ->
             section [ HA.class "nb-import" ]
                 [ div [ HA.class "nb-import-head" ]
-                    [ span [ HA.class "nb-import-title" ] [ text "Paste data — a JSON array of objects, or CSV / TSV" ]
+                    [ span [ HA.class "nb-import-title" ] [ text t.pasteData ]
                     , Html.input
-                        [ HA.class "nb-import-name", HA.value name, HA.placeholder "name", HA.attribute "spellcheck" "false", HE.onInput SetImportName ]
+                        [ HA.class "nb-import-name", HA.value name, HA.placeholder t.namePlaceholder, HA.attribute "spellcheck" "false", HE.onInput SetImportName ]
                         []
                     ]
                 , Html.textarea
@@ -1484,8 +1529,8 @@ pastePanel paste =
                     ]
                     []
                 , div [ HA.class "nb-import-actions" ]
-                    [ button [ HA.class "nb-action nb-action-primary", HE.onClick DoImport ] [ text "Import → cell" ]
-                    , button [ HA.class "nb-action", HE.onClick CancelImport ] [ text "Cancel" ]
+                    [ button [ HA.class "nb-action nb-action-primary", HE.onClick DoImport ] [ text t.importToCell ]
+                    , button [ HA.class "nb-action", HE.onClick CancelImport ] [ text t.cancel ]
                     , span [ HA.class "nb-import-hint" ]
                         [ text
                             (if String.trim txt == "" then
@@ -1504,9 +1549,12 @@ pastePanel paste =
 
 {-| Presentation mode: one slide at a time — its cells rendered live — with prev/next navigation, a
 position indicator, and an "Edit" button back to the notebook. -}
-slideshowView : Workspace.EditorEnv -> NbDoc -> Html NbMsg
-slideshowView env nb =
+slideshowView : Options -> Workspace.EditorEnv -> NbDoc -> Html NbMsg
+slideshowView opts env nb =
     let
+        t =
+            opts.t
+
         deck =
             Slides.slides nb.doc
 
@@ -1522,29 +1570,29 @@ slideshowView env nb =
     div [ HA.class ("nb-slideshow" ++ themeClass nb) ]
         [ section [ HA.class "nb-slide-bar" ]
             [ button [ HA.class "nb-action", HA.disabled (idx <= 0), HE.onClick PrevSlide ]
-                [ Html.i [ HA.class "bi bi-chevron-left" ] [], text " Prev" ]
+                [ Html.i [ HA.class "bi bi-chevron-left" ] [], text t.prev ]
             , span [ HA.class "nb-slide-pos" ]
                 [ text (String.fromInt (idx + 1) ++ " / " ++ String.fromInt (Basics.max 1 total)) ]
             , button [ HA.class "nb-action", HA.disabled (idx >= total - 1), HE.onClick NextSlide ]
-                [ text "Next ", Html.i [ HA.class "bi bi-chevron-right" ] [] ]
+                [ text t.next, Html.i [ HA.class "bi bi-chevron-right" ] [] ]
             , button [ HA.class "nb-action nb-action-report", HE.onClick ToggleSlides ]
-                [ Html.i [ HA.class "bi bi-pencil" ] [], text " Edit" ]
+                [ Html.i [ HA.class "bi bi-pencil" ] [], text t.edit ]
             ]
         , case current of
             Just slide ->
                 div [ HA.class "nb-slide" ]
-                    [ NbView.notebook (viewConfig env nb) (Doc.withCells slide.cells nb.doc) ]
+                    [ NbView.notebook (viewConfig opts env nb) (Doc.withCells slide.cells nb.doc) ]
 
             Nothing ->
                 div [ HA.class "nb-slide nb-slide-empty" ]
-                    [ text "Add a “# heading” to a text cell to start a slide." ]
+                    [ text t.slidesHint ]
         ]
 
 
 {-| Share-by-link: the current notebook encoded as a copyable token, plus a box to paste a token (or
 a `#nb=…` link) and load it over the current notebook. -}
-sharePanel : Maybe String -> Doc -> Html NbMsg
-sharePanel share doc =
+sharePanel : I18n.T -> Maybe String -> Doc -> Html NbMsg
+sharePanel t share doc =
     case share of
         Nothing ->
             text ""
@@ -1552,36 +1600,36 @@ sharePanel share doc =
         Just token ->
             section [ HA.class "nb-share" ]
                 [ div [ HA.class "nb-share-head" ]
-                    [ span [ HA.class "nb-share-title" ] [ Html.i [ HA.class "bi bi-share" ] [], text " Share this notebook" ]
-                    , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseShare ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                    [ span [ HA.class "nb-share-title" ] [ Html.i [ HA.class "bi bi-share" ] [], text t.shareThisNotebook ]
+                    , button [ HA.class "nb-action nb-action-icon", HA.title t.close, HE.onClick CloseShare ] [ Html.i [ HA.class "bi bi-x" ] [] ]
                     ]
-                , span [ HA.class "nb-share-label" ] [ text "Copy this link — it carries the whole notebook:" ]
+                , span [ HA.class "nb-share-label" ] [ text t.shareCopyHint ]
                 , Html.input
                     [ HA.class "nb-share-link", HA.attribute "readonly" "readonly", HA.value (Share.link "" doc), HA.attribute "spellcheck" "false" ]
                     []
-                , span [ HA.class "nb-share-label" ] [ text "…or paste a shared link / token to load it:" ]
+                , span [ HA.class "nb-share-label" ] [ text t.sharePasteHint ]
                 , Html.input
-                    [ HA.class "nb-share-input", HA.placeholder "#nb=… or token", HA.value token, HA.attribute "spellcheck" "false", HE.onInput SetShareInput ]
+                    [ HA.class "nb-share-input", HA.placeholder t.shareTokenPlaceholder, HA.value token, HA.attribute "spellcheck" "false", HE.onInput SetShareInput ]
                     []
                 , div [ HA.class "nb-import-actions" ]
-                    [ button [ HA.class "nb-action nb-action-primary", HE.onClick LoadShared ] [ text "Load shared notebook" ]
-                    , button [ HA.class "nb-action", HE.onClick CloseShare ] [ text "Cancel" ]
+                    [ button [ HA.class "nb-action nb-action-primary", HE.onClick LoadShared ] [ text t.loadShared ]
+                    , button [ HA.class "nb-action", HE.onClick CloseShare ] [ text t.cancel ]
                     ]
                 ]
 
 
 {-| The "New from template" picker: each starter template as a card that replaces the notebook's
 cells when chosen. -}
-templatePanel : Bool -> Html NbMsg
-templatePanel open =
+templatePanel : I18n.T -> Bool -> Html NbMsg
+templatePanel t open =
     if not open then
         text ""
 
     else
         section [ HA.class "nb-templates" ]
             [ div [ HA.class "nb-templates-head" ]
-                [ span [ HA.class "nb-templates-title" ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text " New from template" ]
-                , button [ HA.class "nb-action nb-action-icon", HA.title "Close", HE.onClick CloseTemplates ] [ Html.i [ HA.class "bi bi-x" ] [] ]
+                [ span [ HA.class "nb-templates-title" ] [ Html.i [ HA.class "bi bi-grid-1x2" ] [], text t.newFromTemplate ]
+                , button [ HA.class "nb-action nb-action-icon", HA.title t.close, HE.onClick CloseTemplates ] [ Html.i [ HA.class "bi bi-x" ] [] ]
                 ]
             , div [ HA.class "nb-templates-list" ] (List.map templateCard Templates.all)
             ]
@@ -1610,10 +1658,10 @@ stripShareToken raw =
             t
 
 
-lessonBar : String -> Html NbMsg
-lessonBar active =
+lessonBar : I18n.T -> String -> Html NbMsg
+lessonBar t active =
     section [ HA.class "nb-lessons" ]
-        [ span [ HA.class "nb-lessons-label" ] [ text "Guided lessons:" ]
+        [ span [ HA.class "nb-lessons-label" ] [ text t.guidedLessons ]
         , div [ HA.class "nb-lesson-buttons" ]
             (List.map (lessonButton active) Suggest.lessons)
         ]
