@@ -17,7 +17,7 @@ in `Main` is now [`NbMsg`](#NbMsg) handled here.
 -}
 
 import Dict exposing (Dict)
-import Html exposing (Html, button, div, section, span, text)
+import Html exposing (Html, button, div, h4, input, label, li, p, section, span, strong, text, ul)
 import Html.Attributes as HA
 import Html.Events as HE
 import Json.Decode as D
@@ -49,7 +49,7 @@ import Set exposing (Set)
 import Workspace
 import Workspace.I18n as WsI18n
 import Workspace.Table as Table
-import Workspace.Types exposing (Table)
+import Workspace.Types as WTypes exposing (DocRef, Selector(..), Table)
 
 
 {-| A notebook document plus its transient editor state. `stale` holds the cells whose displayed
@@ -87,7 +87,15 @@ type alias NbDoc =
     , dark : Bool
     , lesson : String
     , stale : Set Int
+    , refData : Dict String Table
+    , refDraft : { binding : String, docId : String, step : String }
     }
+
+
+{-| A blank reference-authoring draft. -}
+emptyRefDraft : { binding : String, docId : String, step : String }
+emptyRefDraft =
+    { binding = "", docId = "", step = "" }
 
 
 {-| Per-cell interactive-table state: the sort column + direction, the row filter, and whether the
@@ -329,6 +337,9 @@ type NbMsg
     | SetInputName Int String
     | SetInputControl Int String
     | CopyToWorkspaceRequested
+    | SetRefField String String
+    | AddRef
+    | RemoveRef Int
 
 
 
@@ -370,7 +381,7 @@ configWith opts =
     { codec = { encode = \nb -> Serialize.encodeDoc nb.doc, decoder = decoder }
     , empty = empty
     , kind = "notebook"
-    , activate = \nb -> { nb | doc = Doc.runAll nb.doc }
+    , activate = \nb -> { nb | doc = Doc.runAllWith (seedKernel nb.refData) nb.doc }
     , viewDoc = viewNb opts False
     , updateDoc = updateNb
     , elementsOf = elementsOf
@@ -378,12 +389,58 @@ configWith opts =
     , onImport = Just importTable
     , t = opts.wsT
     , templates = opts.templates
+    , references = \nb -> nb.doc.refs
+    , provide = provideFromNotebook
+    , absorb = \tables nb -> { nb | refData = tables }
+    , docSql = \_ -> Nothing
     }
+
+
+{-| A fresh kernel preloaded with the tables this notebook pulls in from referenced documents — each
+becomes a top-level binding (`orders = [ { … }, … ]`), so every cell can use it as if defined above. -}
+seedKernel : Dict String Table -> Kernel.Kernel
+seedKernel refData =
+    refData
+        |> Dict.toList
+        |> List.map
+            (\( binding, table ) ->
+                Csv.toElm binding (Table.toCsv table)
+                    |> Result.withDefault (binding ++ " = []")
+            )
+        |> Kernel.seed
+
+
+{-| Satisfy another document's reference into this notebook: a `Step` selector takes that cell's
+result as a table; `WholeDoc` takes the notebook's last tabular value. -}
+provideFromNotebook : Selector -> NbDoc -> Result String Table
+provideFromNotebook selector nb =
+    case selector of
+        Step key ->
+            case String.toInt key of
+                Just id ->
+                    case cellValue id nb of
+                        Just v ->
+                            Export.valueToTable v
+                                |> Result.fromMaybe ("step " ++ key ++ " did not produce a table")
+
+                        Nothing ->
+                            Err ("step " ++ key ++ " has no result — run the notebook")
+
+                Nothing ->
+                    Err ("not a step id: " ++ key)
+
+        WholeDoc ->
+            Doc.lastValue nb.doc
+                |> Maybe.andThen Export.valueToTable
+                |> Result.fromMaybe "this notebook has no tabular result"
+
+        RangeSel _ ->
+            Err "a notebook has steps, not cell ranges"
 
 
 decoder : D.Decoder NbDoc
 decoder =
-    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, dataBars = Set.empty, footers = Set.empty, hidden = Dict.empty, colFilters = Dict.empty, palette = Nothing, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, foldedSections = Set.empty, dark = False, lesson = "", stale = Set.empty }) Serialize.decoder
+    D.map (\d -> { doc = d, carets = Dict.empty, charts = Dict.empty, cols = Dict.empty, tables = Dict.empty, profiles = Set.empty, pivots = Dict.empty, corrs = Set.empty, groups = Dict.empty, numFormats = Dict.empty, heats = Set.empty, dataBars = Set.empty, footers = Set.empty, hidden = Dict.empty, colFilters = Dict.empty, palette = Nothing, paste = Nothing, find = Nothing, ref = Nothing, share = Nothing, templates = False, slideshow = False, slide = 0, report = False, past = [], future = [], active = Nothing, folded = Set.empty, foldedSections = Set.empty, dark = False, lesson = "", stale = Set.empty, refData = Dict.empty, refDraft = emptyRefDraft }) Serialize.decoder
 
 
 empty : NbDoc
@@ -424,6 +481,8 @@ empty =
     , dark = False
     , lesson = ""
     , stale = Set.empty
+    , refData = Dict.empty
+    , refDraft = emptyRefDraft
     }
 
 
@@ -463,6 +522,8 @@ fromSpec spec =
     , dark = False
     , lesson = ""
     , stale = Set.empty
+    , refData = Dict.empty
+    , refDraft = emptyRefDraft
     }
 
 
@@ -477,7 +538,7 @@ examples =
 "Copy to workspace" action in its toolbars. -}
 examplesView : NbDoc -> Html NbMsg
 examplesView nb =
-    viewNb defaults True { comments = Dict.empty, commentsVisible = False, commentCount = always 0 } nb
+    viewNb defaults True { comments = Dict.empty, commentsVisible = False, commentCount = always 0, refError = Nothing, refWarnings = [] } nb
 
 
 elementsOf : NbDoc -> List ( String, String )
@@ -1060,6 +1121,68 @@ step msg nb =
             -- handled by the host (see Main), which copies this notebook into the workspace
             nb
 
+        SetRefField which value ->
+            let
+                d =
+                    nb.refDraft
+
+                d2 =
+                    case which of
+                        "binding" ->
+                            { d | binding = value }
+
+                        "docId" ->
+                            { d | docId = value }
+
+                        _ ->
+                            { d | step = value }
+            in
+            { nb | refDraft = d2 }
+
+        AddRef ->
+            let
+                d =
+                    nb.refDraft
+
+                binding =
+                    String.trim d.binding
+
+                docId =
+                    String.trim d.docId
+
+                step =
+                    String.trim d.step
+            in
+            if binding == "" || docId == "" then
+                nb
+
+            else
+                let
+                    selector =
+                        if step == "" then
+                            WholeDoc
+
+                        else
+                            Step step
+
+                    newRef =
+                        { binding = binding, docId = docId, selector = selector }
+                in
+                { nb
+                    | doc = Doc.setRefs (nb.doc.refs ++ [ newRef ]) nb.doc
+                    , refDraft = emptyRefDraft
+                }
+
+        RemoveRef index ->
+            { nb | doc = Doc.setRefs (dropIndex index nb.doc.refs) nb.doc }
+
+
+dropIndex : Int -> List a -> List a
+dropIndex index xs =
+    List.indexedMap Tuple.pair xs
+        |> List.filter (\( i, _ ) -> i /= index)
+        |> List.map Tuple.second
+
 
 {-| Did this message ask to copy the standalone playground into the workspace? The host intercepts
 it (the adapter can't reach the workspace state). -}
@@ -1155,9 +1278,73 @@ editView opts showCopy env nb =
                       else
                         text ""
                     , NbView.variablesPanel t InsertName (Doc.variables nb.doc)
+                    , docRefsPanel nb
                     ]
             ]
         ]
+
+
+{-| The document-references sidebar panel: the notebook's outgoing references (each removable), a
+small form to add one (a local binding name, the target document's id, and an optional step id), and
+a list of this notebook's own steps with their stable ids so they can be referenced from elsewhere. -}
+docRefsPanel : NbDoc -> Html NbMsg
+docRefsPanel nb =
+    let
+        d =
+            nb.refDraft
+    in
+    section [ HA.class "nb-refs-panel" ]
+        [ h4 [ HA.class "nb-panel-title" ] [ text "References" ]
+        , if List.isEmpty nb.doc.refs then
+            p [ HA.class "nb-refs-empty" ] [ text "Pull a step's result from another notebook (or a range from a spreadsheet) in as a table." ]
+
+          else
+            ul [ HA.class "nb-refs-list" ] (List.indexedMap refRow nb.doc.refs)
+        , div [ HA.class "nb-refs-form" ]
+            [ input [ HA.class "nb-ref-in", HA.placeholder "binding", HA.value d.binding, HE.onInput (SetRefField "binding") ] []
+            , input [ HA.class "nb-ref-in", HA.placeholder "document id", HA.value d.docId, HE.onInput (SetRefField "docId") ] []
+            , input [ HA.class "nb-ref-in", HA.placeholder "step id (blank = whole)", HA.value d.step, HE.onInput (SetRefField "step") ] []
+            , button [ HA.class "nb-ref-add", HE.onClick AddRef ] [ text "Add reference" ]
+            ]
+        , h4 [ HA.class "nb-panel-title" ] [ text "This notebook's steps" ]
+        , ul [ HA.class "nb-steps-list" ] (List.map stepRow (List.filter Cell.isExecutable nb.doc.cells))
+        ]
+
+
+refRow : Int -> DocRef -> Html NbMsg
+refRow index ref =
+    li [ HA.class "nb-ref-item" ]
+        [ span [ HA.class "nb-ref-binding" ] [ text ref.binding ]
+        , span [ HA.class "nb-ref-arrow" ] [ text " ← " ]
+        , span [ HA.class "nb-ref-target" ] [ text (shortId ref.docId ++ " · " ++ WTypes.selectorLabel ref.selector) ]
+        , button [ HA.class "nb-ref-x", HA.title "Remove", HE.onClick (RemoveRef index) ] [ text "×" ]
+        ]
+
+
+stepRow : Cell -> Html NbMsg
+stepRow cell =
+    li [ HA.class "nb-step-item" ]
+        [ strong [ HA.class "nb-step-id" ] [ text (String.fromInt cell.id) ]
+        , span [ HA.class "nb-step-src" ] [ text (stepPreview cell.source) ]
+        ]
+
+
+stepPreview : String -> String
+stepPreview source =
+    let
+        firstLine =
+            String.lines source |> List.head |> Maybe.withDefault ""
+    in
+    if String.length firstLine > 32 then
+        String.left 32 firstLine ++ "…"
+
+    else
+        firstLine
+
+
+shortId : String -> String
+shortId id =
+    String.left 8 id
 
 
 viewConfig : Options -> Workspace.EditorEnv -> NbDoc -> NbView.Config NbMsg

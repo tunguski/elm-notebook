@@ -1,8 +1,9 @@
 module Notebook.Doc exposing
-    ( Doc, empty, fromSpec
+    ( Doc, empty, fromSpec, fromCells
     , append, appendInput, insertAfter, insertBefore, duplicate, remove, moveUp, moveDown
     , setSource, setKind, setInputValue, setInputName, setInputControl
-    , runAll, runThrough, runAffected, clearOutputs
+    , setRefs
+    , runAll, runAllWith, runThrough, runAffected, clearOutputs
     , find, lastValue, codeCount, variables, executableIds, withCells
     )
 
@@ -25,26 +26,48 @@ import Lang exposing (Value)
 import Notebook.Cell as Cell exposing (Cell, CellKind(..), InputSpec, Output(..))
 import Notebook.Kernel as Kernel exposing (Kernel)
 import Set exposing (Set)
+import Workspace.Types exposing (DocRef)
 
 
-{-| A notebook: its cells, the id to hand the next new cell, and the current kernel. -}
+{-| A notebook: its cells, the id to hand the next new cell, the current kernel, and its outgoing
+**references** to other documents (see [`Workspace.Refs`](Workspace-Refs)). A cell's `id` is stable
+for the life of the document *and across save/load* (it is serialised), so a reference to "step N"
+keeps pointing at the same cell even after cells are reordered or the notebook is reopened. -}
 type alias Doc =
     { cells : List Cell
     , nextId : Int
     , kernel : Kernel
+    , refs : List DocRef
     }
 
 
 {-| An empty notebook with a fresh kernel. -}
 empty : Doc
 empty =
-    { cells = [], nextId = 1, kernel = Kernel.empty }
+    { cells = [], nextId = 1, kernel = Kernel.empty, refs = [] }
 
 
 {-| Build a notebook from a list of `(kind, source)` pairs — used by the lesson templates. -}
 fromSpec : List ( CellKind, String ) -> Doc
 fromSpec spec =
     List.foldl (\( kind, source ) doc -> append kind source doc) empty spec
+
+
+{-| Rebuild a notebook from already-identified cells (used by the deserialiser, which restores each
+cell's stored id). `nextId` continues past the largest id so new cells never collide. -}
+fromCells : List Cell -> List DocRef -> Doc
+fromCells cells refs =
+    { cells = cells
+    , nextId = (List.map .id cells |> List.maximum |> Maybe.withDefault 0) + 1
+    , kernel = Kernel.empty
+    , refs = refs
+    }
+
+
+{-| Replace the document's outgoing references. -}
+setRefs : List DocRef -> Doc -> Doc
+setRefs refs doc =
+    { doc | refs = refs }
 
 
 newCell : Int -> CellKind -> String -> Cell
@@ -211,7 +234,15 @@ mapCell targetId f doc =
 {-| Re-run the whole notebook from a fresh kernel. -}
 runAll : Doc -> Doc
 runAll doc =
-    runFrom Nothing doc
+    runFrom Nothing Kernel.empty doc
+
+
+{-| Re-run the whole notebook from a **seeded** kernel — one already carrying extra bindings, such
+as the tables pulled in from referenced documents. Referenced data is thus in scope for every cell,
+exactly as if it had been defined above them. -}
+runAllWith : Kernel -> Doc -> Doc
+runAllWith startKernel doc =
+    runFrom Nothing startKernel doc
 
 
 {-| Re-run from a fresh kernel up to and including the given cell; later cells keep their
@@ -220,11 +251,11 @@ cell above it.)
 -}
 runThrough : Int -> Doc -> Doc
 runThrough targetId doc =
-    runFrom (Just targetId) doc
+    runFrom (Just targetId) Kernel.empty doc
 
 
-runFrom : Maybe Int -> Doc -> Doc
-runFrom stopAt doc =
+runFrom : Maybe Int -> Kernel -> Doc -> Doc
+runFrom stopAt startKernel doc =
     let
         step cell ( kernel, done, acc ) =
             if done then
@@ -254,7 +285,7 @@ runFrom stopAt doc =
                 )
 
         ( finalKernel, _, reversed ) =
-            List.foldl step ( Kernel.empty, False, [] ) doc.cells
+            List.foldl step ( startKernel, False, [] ) doc.cells
     in
     { doc | cells = List.reverse reversed, kernel = finalKernel }
 

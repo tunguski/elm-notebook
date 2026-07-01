@@ -1,4 +1,4 @@
-module Notebook.Kernel exposing (Kernel, empty, run, names, bindings)
+module Notebook.Kernel exposing (Kernel, empty, seed, run, names, bindings)
 
 {-| The notebook **kernel**: the stateful engine that executes code cells, the role the Python
 process plays in Jupyter — but here the language is real Elm, run by the vendored
@@ -47,6 +47,19 @@ empty =
             |> Result.withDefault Dict.empty
     , count = 0
     }
+
+
+{-| A fresh kernel with extra top-level definitions merged in — each `defs` entry is a chunk of Elm
+source (`name = expr`). Used to preload the tables a notebook pulls in from referenced documents so
+they are in scope before any cell runs. The execution counter is reset to 0 so the first real cell
+is still `[1]`. -}
+seed : List String -> Kernel
+seed defs =
+    let
+        seeded =
+            List.foldl (\src k -> Tuple.second (run src k)) empty defs
+    in
+    { seeded | count = 0 }
 
 
 {-| The names currently in scope (prelude + everything defined so far). -}

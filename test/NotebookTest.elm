@@ -42,6 +42,7 @@ import Notebook.Templates as Templates
 import Notebook.Value as Value
 import Notebook.View as NbView
 import Test exposing (Test, describe, test)
+import Workspace.Types
 
 
 suite : Test
@@ -90,6 +91,7 @@ suite =
         , csvTests
         , importTests
         , serializeTests
+        , refsTests
         , exportTests
         , lessonTests
         ]
@@ -189,6 +191,91 @@ serializeTests =
 
                     _ ->
                         Expect.fail "expected one input spec"
+        , test "preserves stable cell ids across save/load" <|
+            \_ ->
+                let
+                    doc =
+                        Doc.empty
+                            |> Doc.append Markdown "a"
+                            |> Doc.append Code "b"
+                            |> Doc.append Code "c"
+
+                    ids =
+                        List.map .id doc.cells
+
+                    restoredIds =
+                        Serialize.decode (Serialize.encode doc)
+                            |> Result.map (\d -> List.map .id d.cells)
+                in
+                Expect.equal (Ok ids) restoredIds
+        , test "a step id stays valid after reordering + reload" <|
+            \_ ->
+                let
+                    doc =
+                        Doc.empty
+                            |> Doc.append Code "first"
+                            |> Doc.append Code "second"
+
+                    secondId =
+                        doc.cells |> List.drop 1 |> List.head |> Maybe.map .id |> Maybe.withDefault -1
+
+                    -- move it up, then round-trip; its id must not change
+                    reloaded =
+                        Doc.moveUp secondId doc
+                            |> Serialize.encode
+                            |> Serialize.decode
+                in
+                case reloaded |> Result.andThen (\d -> Doc.find secondId d |> Result.fromMaybe "gone") of
+                    Ok cell ->
+                        Expect.equal "second" cell.source
+
+                    Err e ->
+                        Expect.fail e
+        , test "outgoing references round-trip" <|
+            \_ ->
+                let
+                    doc =
+                        Doc.empty
+                            |> Doc.append Code "x = 1"
+                            |> Doc.setRefs
+                                [ { binding = "orders", docId = "abc-123", selector = Workspace.Types.Step "7" } ]
+
+                    restored =
+                        Serialize.decode (Serialize.encode doc)
+                in
+                Expect.equal (Ok doc.refs) (Result.map .refs restored)
+        ]
+
+
+refsTests : Test
+refsTests =
+    describe "cross-document references (kernel seeding)"
+        [ test "a seeded binding is in scope for cells" <|
+            \_ ->
+                let
+                    kernel =
+                        Kernel.seed [ "orders = [ { amount = 10 }, { amount = 30 } ]" ]
+
+                    doc =
+                        Doc.empty
+                            |> Doc.append Code "List.sum (List.map (\\r -> r.amount) orders)"
+                            |> Doc.runAllWith kernel
+                in
+                case Doc.lastValue doc of
+                    Just v ->
+                        Expect.equal "40" (Value.displayValue v)
+
+                    Nothing ->
+                        Expect.fail "the seeded binding was not usable"
+        , test "seeding resets the execution counter so cells start at [1]" <|
+            \_ ->
+                let
+                    doc =
+                        Doc.empty
+                            |> Doc.append Code "1 + 1"
+                            |> Doc.runAllWith (Kernel.seed [ "foo = 1", "bar = 2" ])
+                in
+                Expect.equal (Just 1) (doc.cells |> List.head |> Maybe.andThen .count)
         ]
 
 

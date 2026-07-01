@@ -64,6 +64,8 @@ type alias T =
     , queryRunsOnDatabase : String
     , noDatabaseRunningDisabled : String
     , noDatabaseConnection : String
+    , reloadData : String
+    , reloadReferencedData : String
     , doesNotSupportImporting : String
     , excel : String
     , excelNotAvailable : String
@@ -130,6 +132,8 @@ en =
     , queryRunsOnDatabase = "The query runs on the workspace's database and the result is added to the document."
     , noDatabaseRunningDisabled = "This workspace has no database connection, so running is disabled. With a database backend (e.g. in the bbx app) this runs the query and adds the result to the document."
     , noDatabaseConnection = "This workspace has no database connection."
+    , reloadData = "Reload data"
+    , reloadReferencedData = "Re-fetch the documents this one references and refresh its data."
     , doesNotSupportImporting = "This document does not support importing data."
     , excel = "Excel"
     , excelNotAvailable = "Excel export is not available here."

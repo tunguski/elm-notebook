@@ -31,20 +31,24 @@ import Html.Events as HE
 import Json.Decode as D
 import Json.Encode as E
 import Random
+import Set exposing (Set)
 import Url
 import Workspace.Backend exposing (Backend, Context)
 import Workspace.Comment as Comment
 import Workspace.I18n as I18n
 import Workspace.Permissions as Permissions
+import Workspace.Refs as Refs
 import Workspace.Serialize as Serialize
 import Workspace.Table as Table
 import Workspace.Types as Types
     exposing
         ( Access
         , Comments
+        , DocRef
         , Id
         , Meta
         , Principal(..)
+        , Selector
         , Stored
         , Table
         , Visibility(..)
@@ -63,11 +67,15 @@ type alias DocCodec doc =
 
 
 {-| Read-only information the workspace hands the host's editor view, so it can show comment markers
-where conversation lives. -}
+where conversation lives — and, when the document references others, whether those references form a
+cycle (`refError`, a ready-made banner sentence) or produced soft warnings (`refWarnings`). While
+`refError` is present the host should show the problem and not act on referenced data. -}
 type alias EditorEnv =
     { comments : Comments
     , commentsVisible : Bool
     , commentCount : String -> Int
+    , refError : Maybe String
+    , refWarnings : List String
     }
 
 
@@ -84,6 +92,18 @@ type alias EditorEnv =
   - `t` — the chrome translations (see [`Workspace.I18n`](Workspace-I18n)).
   - `templates` — optional starting templates offered when creating a document (empty ⇒ no picker).
 
+Cross-document references (see [`Workspace.Refs`](Workspace-Refs)) are configured by four more hooks;
+a document type that never references anything supplies the trivial versions (`\_ -> []`,
+`\_ _ -> Err …`, `\_ d -> d`, `\_ -> Nothing`):
+
+  - `references` — the document's outgoing references.
+  - `provide` — hand another document a table for a [`Selector`](Workspace-Types#Selector) into this
+    one (a step's result, a range, the whole thing).
+  - `absorb` — inject resolved reference tables (keyed by each reference's `binding`) before the
+    document is activated.
+  - `docSql` — if this document *is* a query, the SQL to run (the shell shows a Run button and
+    stores the result through `onImport`); `Nothing` for non-query documents.
+
 -}
 type alias Config doc docMsg =
     { codec : DocCodec doc
@@ -97,6 +117,10 @@ type alias Config doc docMsg =
     , onImport : Maybe (Table -> doc -> doc)
     , t : I18n.T
     , templates : List (Template doc)
+    , references : doc -> List DocRef
+    , provide : Selector -> doc -> Result String Table
+    , absorb : Dict String Table -> doc -> doc
+    , docSql : doc -> Maybe String
     }
 
 
@@ -148,6 +172,10 @@ type alias Model doc =
     , sqlDraft : String
     , notice : Maybe String
     , pending : Maybe doc
+    , refDocs : Dict Id (Stored doc)
+    , refPending : Set Id
+    , refError : Maybe Refs.RefError
+    , refWarnings : List String
     }
 
 
@@ -168,6 +196,10 @@ init backend =
       , sqlDraft = ""
       , notice = Nothing
       , pending = Nothing
+      , refDocs = Dict.empty
+      , refPending = Set.empty
+      , refError = Nothing
+      , refWarnings = []
       }
     , backend.listMetas GotMetas
     )
@@ -228,6 +260,9 @@ type Msg docMsg
     | GotQuery (Result String Table)
     | ExportExcel
     | DismissNotice
+    | GotRef Id (Result String String)
+    | ReloadRefs
+    | RunDocQuery
 
 
 {-| Advance the workspace. `Config` and `Backend` come from the host; `Context` is the acting user. -}
@@ -246,14 +281,19 @@ update config backend ctx msg model =
         GotDoc (Ok json) ->
             case decodeStored config json of
                 Ok stored ->
-                    ( { model
-                        | open = Just (Types.setDoc (config.activate stored.doc) stored)
-                        , page = Editing
-                        , dialog = NoDialog
-                        , notice = Nothing
-                      }
-                    , Cmd.none
-                    )
+                    -- Activation is deferred into resolution: a document is only run once its
+                    -- referenced data has been loaded and absorbed (or found to be a cycle).
+                    beginResolve config backend
+                        { model
+                            | open = Just stored
+                            , page = Editing
+                            , dialog = NoDialog
+                            , notice = Nothing
+                            , refDocs = Dict.empty
+                            , refPending = Set.empty
+                            , refError = Nothing
+                            , refWarnings = []
+                        }
 
                 Err e ->
                     ( { model | notice = Just (config.t.couldNotOpenDocument ++ e) }, Cmd.none )
@@ -534,9 +574,170 @@ update config backend ctx msg model =
         DismissNotice ->
             ( { model | notice = Nothing }, Cmd.none )
 
+        GotRef id result ->
+            let
+                loaded =
+                    { model | refPending = Set.remove id model.refPending }
+
+                withDoc =
+                    case result of
+                        Ok json ->
+                            case decodeStored config json of
+                                Ok stored ->
+                                    { loaded | refDocs = Dict.insert id stored loaded.refDocs }
+
+                                Err _ ->
+                                    loaded
+
+                        Err _ ->
+                            loaded
+
+                discovered =
+                    case Dict.get id withDoc.refDocs of
+                        Just stored ->
+                            referencedIds config stored
+
+                        Nothing ->
+                            []
+
+                ( advanced, cmd ) =
+                    loadMissing config backend discovered withDoc
+            in
+            if Set.isEmpty advanced.refPending then
+                finishResolve config backend advanced
+
+            else
+                ( advanced, cmd )
+
+        ReloadRefs ->
+            case model.open of
+                Just _ ->
+                    beginResolve config
+                        backend
+                        { model | refDocs = Dict.empty, refPending = Set.empty, refError = Nothing, refWarnings = [] }
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RunDocQuery ->
+            case ( model.open, backend.query ) of
+                ( Just stored, Just runQuery ) ->
+                    case config.docSql stored.doc of
+                        Just sql ->
+                            if String.trim sql == "" then
+                                ( { model | notice = Just config.t.enterAQuery }, Cmd.none )
+
+                            else
+                                ( model, runQuery (String.trim sql) GotQuery )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                ( Just _, Nothing ) ->
+                    ( { model | notice = Just config.t.noDatabaseConnection }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- UPDATE HELPERS -------------------------------------------------------------
+
+
+{-| The ids the open (or any) document references directly. -}
+referencedIds : Config doc docMsg -> Stored doc -> List Id
+referencedIds config stored =
+    config.references stored.doc |> List.map .docId
+
+
+{-| The [`Refs.Resolver`](Workspace-Refs#Resolver) assembled from the host config. -}
+resolver : Config doc docMsg -> Refs.Resolver doc
+resolver config =
+    { references = config.references
+    , provide = config.provide
+    , absorb = config.absorb
+    , activate = config.activate
+    }
+
+
+{-| Ensure every id in `ids` is loaded (skipping the open document, ones already cached, and ones
+already in flight): mark them pending and issue their loads. -}
+loadMissing : Config doc docMsg -> Backend (Msg docMsg) -> List Id -> Model doc -> ( Model doc, Cmd (Msg docMsg) )
+loadMissing config backend ids model =
+    let
+        openId =
+            case model.open of
+                Just s ->
+                    s.meta.id
+
+                Nothing ->
+                    ""
+
+        wanted =
+            ids
+                |> List.filter
+                    (\id ->
+                        id /= openId && not (Dict.member id model.refDocs) && not (Set.member id model.refPending)
+                    )
+                |> Set.fromList
+                |> Set.toList
+    in
+    ( { model | refPending = List.foldl Set.insert model.refPending wanted }
+    , Cmd.batch (List.map (\id -> backend.load id (GotRef id)) wanted)
+    )
+
+
+{-| Begin resolving the open document's references: load its direct references (transitive loads
+follow as each arrives via `GotRef`), or finish now if it has none. -}
+beginResolve : Config doc docMsg -> Backend (Msg docMsg) -> Model doc -> ( Model doc, Cmd (Msg docMsg) )
+beginResolve config backend model =
+    case model.open of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just stored ->
+            let
+                ( advanced, cmd ) =
+                    loadMissing config backend (referencedIds config stored) model
+            in
+            if Set.isEmpty advanced.refPending then
+                finishResolve config backend advanced
+
+            else
+                ( advanced, cmd )
+
+
+{-| The reference closure is fully loaded: run the pure resolver. On a cycle, record it and leave the
+document unevaluated (the host shows the loop); otherwise swap in the resolved (absorbed + activated)
+open document, keep the resolved closure for its own provides, surface warnings, and persist. -}
+finishResolve : Config doc docMsg -> Backend (Msg docMsg) -> Model doc -> ( Model doc, Cmd (Msg docMsg) )
+finishResolve config backend model =
+    case model.open of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just stored ->
+            let
+                cache =
+                    Dict.insert stored.meta.id stored model.refDocs
+            in
+            case Refs.resolve (resolver config) stored.meta.id cache of
+                Err refErr ->
+                    ( { model | refError = Just refErr, refWarnings = [] }, Cmd.none )
+
+                Ok res ->
+                    let
+                        openStored =
+                            Dict.get stored.meta.id res.docs |> Maybe.withDefault stored
+                    in
+                    persist config
+                        backend
+                        { model
+                            | open = Just openStored
+                            , refDocs = Dict.remove stored.meta.id res.docs
+                            , refError = Nothing
+                            , refWarnings = res.warnings
+                        }
 
 
 {-| Add a new document (with id `id` and body `doc`) to the workspace and open it. -}
@@ -905,13 +1106,17 @@ editorView config c ctx model =
                     { comments = stored.comments
                     , commentsVisible = model.commentsVisible
                     , commentCount = \k -> Comment.countFor k stored.comments
+                    , refError = Maybe.map Refs.refErrorLabel model.refError
+                    , refWarnings = model.refWarnings
                     }
             in
             section [ HA.class "ws-editor" ]
                 [ editorBar config c ctx model stored writable
                 , div [ HA.class "ws-editor-body" ]
                     [ div [ HA.class "ws-doc" ]
-                        [ Html.map DocMsg (config.viewDoc env stored.doc) ]
+                        [ refBanner model
+                        , Html.map DocMsg (config.viewDoc env stored.doc)
+                        ]
                     , if model.commentsVisible then
                         commentsPanel config ctx stored model.drafts
 
@@ -971,6 +1176,8 @@ editorBar config c ctx model stored writable =
                 Nothing ->
                     text ""
             , queryButton config
+            , runDocButton config c stored
+            , reloadButton config stored
             , exportLinks config c model stored table
             , button [ HA.class "ws-btn", HE.onClick (Duplicate stored.meta.id) ] [ text config.t.copy ]
             , if writable then
@@ -990,6 +1197,66 @@ queryButton config =
 
         Nothing ->
             text ""
+
+
+{-| The "Run" button for a query document (`docSql` returns `Just`); disabled without a database. -}
+runDocButton : Config doc docMsg -> Caps -> Stored doc -> Html (Msg docMsg)
+runDocButton config c stored =
+    case config.docSql stored.doc of
+        Just _ ->
+            button
+                [ HA.class "ws-btn ws-btn-primary"
+                , HA.disabled (not c.hasQuery)
+                , HA.title
+                    (if c.hasQuery then
+                        config.t.runQuery
+
+                     else
+                        config.t.noDatabaseRunningDisabled
+                    )
+                , HE.onClick RunDocQuery
+                ]
+                [ Html.i [ HA.class "bi bi-play-fill" ] [], text (" " ++ config.t.runQuery) ]
+
+        Nothing ->
+            text ""
+
+
+{-| The "Reload data" button, shown when the document references others. Re-fetches the closure and
+re-resolves — for a spreadsheet, this pulls fresh values into its referenced ranges. -}
+reloadButton : Config doc docMsg -> Stored doc -> Html (Msg docMsg)
+reloadButton config stored =
+    if List.isEmpty (config.references stored.doc) then
+        text ""
+
+    else
+        button
+            [ HA.class "ws-btn", HA.title config.t.reloadReferencedData, HE.onClick ReloadRefs ]
+            [ Html.i [ HA.class "bi bi-arrow-clockwise" ] [], text (" " ++ config.t.reloadData) ]
+
+
+{-| A banner above the document: a hard stop for a reference cycle, or a soft note for warnings (a
+referenced document missing or a selector that did not resolve). -}
+refBanner : Model doc -> Html (Msg docMsg)
+refBanner model =
+    case model.refError of
+        Just err ->
+            div [ HA.class "ws-ref-error" ]
+                [ Html.i [ HA.class "bi bi-exclamation-triangle-fill" ] []
+                , span [ HA.class "ws-ref-error-msg" ] [ text (Refs.refErrorLabel err) ]
+                , span [ HA.class "ws-ref-error-hint" ] [ text "Break the loop to run this document." ]
+                ]
+
+        Nothing ->
+            case model.refWarnings of
+                [] ->
+                    text ""
+
+                warnings ->
+                    div [ HA.class "ws-ref-warn" ]
+                        (Html.i [ HA.class "bi bi-info-circle" ] []
+                            :: List.map (\w -> span [ HA.class "ws-ref-warn-item" ] [ text w ]) warnings
+                        )
 
 
 exportLinks : Config doc docMsg -> Caps -> Model doc -> Stored doc -> Maybe Table -> Html (Msg docMsg)

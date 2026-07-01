@@ -11,8 +11,10 @@ consistent with the source.
 
 import Json.Decode as D
 import Json.Encode as E
-import Notebook.Cell exposing (CellKind(..), Control(..), InputSpec)
+import Notebook.Cell as Cell exposing (Cell, CellKind(..), Control(..), InputSpec)
 import Notebook.Doc as Doc exposing (Doc)
+import Workspace.Serialize as WSerialize
+import Workspace.Types exposing (DocRef)
 
 
 {-| Serialise a notebook to a compact JSON string. -}
@@ -26,27 +28,29 @@ encode doc =
 encodeDoc : Doc -> E.Value
 encodeDoc doc =
     E.object
-        [ ( "version", E.int 1 )
+        [ ( "version", E.int 2 )
         , ( "cells", E.list encodeCell doc.cells )
+        , ( "refs", WSerialize.encodeRefs doc.refs )
         ]
 
 
-encodeCell : Notebook.Cell.Cell -> E.Value
+encodeCell : Cell -> E.Value
 encodeCell cell =
+    -- The stable id is stored so a cross-document reference to "step N" survives reopening.
     case cell.kind of
         Markdown ->
-            E.object [ ( "kind", E.string "markdown" ), ( "source", E.string cell.source ) ]
+            E.object [ ( "id", E.int cell.id ), ( "kind", E.string "markdown" ), ( "source", E.string cell.source ) ]
 
         Code ->
-            E.object [ ( "kind", E.string "code" ), ( "source", E.string cell.source ) ]
+            E.object [ ( "id", E.int cell.id ), ( "kind", E.string "code" ), ( "source", E.string cell.source ) ]
 
         Input ->
             case cell.input of
                 Just spec ->
-                    E.object [ ( "kind", E.string "input" ), ( "input", encodeInput spec ) ]
+                    E.object [ ( "id", E.int cell.id ), ( "kind", E.string "input" ), ( "input", encodeInput spec ) ]
 
                 Nothing ->
-                    E.object [ ( "kind", E.string "code" ), ( "source", E.string cell.source ) ]
+                    E.object [ ( "id", E.int cell.id ), ( "kind", E.string "code" ), ( "source", E.string cell.source ) ]
 
 
 encodeInput : InputSpec -> E.Value
@@ -93,26 +97,53 @@ decoder =
 
 docDecoder : D.Decoder Doc
 docDecoder =
-    D.field "cells" (D.list cellDecoder)
-        |> D.map (\steps -> List.foldl (\step doc -> step doc) Doc.empty steps)
+    D.map2 buildDoc
+        (D.field "cells" (D.list cellDecoder))
+        (D.oneOf [ D.field "refs" WSerialize.refsDecoder, D.succeed [] ])
 
 
-{-| Each cell decodes to a `Doc -> Doc` that appends it. -}
-cellDecoder : D.Decoder (Doc -> Doc)
+{-| Assemble cells, restoring each cell's stored id. Legacy notebooks (v1) have no ids, so any cell
+missing one is assigned a fresh id past the largest stored id — keeping every id unique and stable
+from here on. -}
+buildDoc : List ( Maybe Int, Int -> Cell ) -> List DocRef -> Doc
+buildDoc raw refs =
+    let
+        maxStored =
+            raw |> List.filterMap Tuple.first |> List.maximum |> Maybe.withDefault 0
+
+        assign ( maybeId, mk ) ( nextFree, acc ) =
+            case maybeId of
+                Just id ->
+                    ( nextFree, mk id :: acc )
+
+                Nothing ->
+                    ( nextFree + 1, mk nextFree :: acc )
+
+        ( _, reversed ) =
+            List.foldl assign ( maxStored + 1, [] ) raw
+    in
+    Doc.fromCells (List.reverse reversed) refs
+
+
+{-| Each cell decodes to its stored id (if any) and a builder that stamps a final id onto it. -}
+cellDecoder : D.Decoder ( Maybe Int, Int -> Cell )
 cellDecoder =
-    D.field "kind" D.string
-        |> D.andThen
-            (\kind ->
-                case kind of
-                    "markdown" ->
-                        D.field "source" D.string |> D.map (Doc.append Markdown)
+    D.map2 Tuple.pair
+        (D.maybe (D.field "id" D.int))
+        (D.field "kind" D.string
+            |> D.andThen
+                (\kind ->
+                    case kind of
+                        "markdown" ->
+                            D.field "source" D.string |> D.map (\s id -> Cell.markdown id s)
 
-                    "input" ->
-                        D.field "input" inputDecoder |> D.map Doc.appendInput
+                        "input" ->
+                            D.field "input" inputDecoder |> D.map (\spec id -> Cell.inputCell id spec)
 
-                    _ ->
-                        D.field "source" D.string |> D.map (Doc.append Code)
-            )
+                        _ ->
+                            D.field "source" D.string |> D.map (\s id -> Cell.code id s)
+                )
+        )
 
 
 inputDecoder : D.Decoder InputSpec

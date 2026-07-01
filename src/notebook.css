@@ -626,3 +626,113 @@ a:hover { text-decoration: underline; }
 .nb-section-fold { padding: .25rem .45rem; }
 .nb-section-fold .bi { font-size: 13px; vertical-align: -1px; }
 .nb-section-collapsed { opacity: 0.92; }
+
+/* ---- cross-document references panel --------------------------------------
+   Sidebar panel to reference another notebook's step (or a spreadsheet range),
+   and a list of this notebook's own stable step ids so they can be targeted. */
+.nb-refs-panel {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line, #e6e8ef);
+}
+
+.nb-refs-empty {
+    margin: 4px 0 8px;
+    font-size: 12px;
+    color: var(--muted, #6a748a);
+}
+
+.nb-refs-list,
+.nb-steps-list {
+    list-style: none;
+    margin: 4px 0 8px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.nb-ref-item {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    font-size: 12px;
+}
+
+.nb-ref-binding {
+    font-weight: 600;
+    color: var(--accent, #5b6ef5);
+}
+
+.nb-ref-arrow {
+    color: var(--muted, #6a748a);
+}
+
+.nb-ref-target {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    color: var(--ink, #1f2733);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nb-ref-x {
+    border: none;
+    background: none;
+    color: #b3261e;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.nb-refs-form {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 10px;
+}
+
+.nb-ref-in {
+    border: 1px solid var(--line, #d7dbe6);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.nb-ref-in:focus {
+    outline: none;
+    border-color: var(--accent, #5b6ef5);
+}
+
+.nb-ref-add {
+    border: 1px solid var(--accent, #5b6ef5);
+    background: var(--accent-soft, #eef0fe);
+    color: var(--accent, #4655d6);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.nb-step-item {
+    display: flex;
+    gap: 7px;
+    font-size: 12px;
+}
+
+.nb-step-id {
+    color: var(--accent, #5b6ef5);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    min-width: 18px;
+}
+
+.nb-step-src {
+    color: var(--muted, #6a748a);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
