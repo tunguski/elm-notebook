@@ -1158,9 +1158,14 @@ step msg nb =
 
             else
                 let
+                    -- A "A1:C10" source references a spreadsheet range; a plain token is a step
+                    -- id; blank is the whole document.
                     selector =
                         if step == "" then
                             WholeDoc
+
+                        else if String.contains ":" step then
+                            RangeSel step
 
                         else
                             Step step
@@ -1303,7 +1308,7 @@ docRefsPanel nb =
         , div [ HA.class "nb-refs-form" ]
             [ input [ HA.class "nb-ref-in", HA.placeholder "binding", HA.value d.binding, HE.onInput (SetRefField "binding") ] []
             , input [ HA.class "nb-ref-in", HA.placeholder "document id", HA.value d.docId, HE.onInput (SetRefField "docId") ] []
-            , input [ HA.class "nb-ref-in", HA.placeholder "step id (blank = whole)", HA.value d.step, HE.onInput (SetRefField "step") ] []
+            , input [ HA.class "nb-ref-in", HA.placeholder "step id / A1:C10 (blank = whole)", HA.value d.step, HE.onInput (SetRefField "step") ] []
             , button [ HA.class "nb-ref-add", HE.onClick AddRef ] [ text "Add reference" ]
             ]
         , h4 [ HA.class "nb-panel-title" ] [ text "This notebook's steps" ]
